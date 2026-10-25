@@ -33,13 +33,13 @@ static unsigned char *load_png(const char *path,int *w,int *h){
 }
 
 /* box filter down, bilinear up, premultiplied for the shader */
-static unsigned char *fit(const unsigned char *src,int w,int h){
-	unsigned char *dst=malloc(ICON*ICON*4);
+static unsigned char *fit(const unsigned char *src,int w,int h,int size){
+	unsigned char *dst=malloc((size_t)size*size*4);
 	if(!dst){return NULL;}
-	for(int y=0;y<ICON;y++){for(int x=0;x<ICON;x++){
+	for(int y=0;y<size;y++){for(int x=0;x<size;x++){
 		float acc[4]={0},n=0;
-		if(w>ICON || h>ICON){
-			int x0=x*w/ICON,x1=(x+1)*w/ICON,y0=y*h/ICON,y1=(y+1)*h/ICON;
+		if(w>size || h>size){
+			int x0=x*w/size,x1=(x+1)*w/size,y0=y*h/size,y1=(y+1)*h/size;
 			if(x1<=x0){x1=x0+1;}if(y1<=y0){y1=y0+1;}
 			for(int sy=y0;sy<y1;sy++){for(int sx=x0;sx<x1;sx++){
 				const unsigned char *p=src+((size_t)sy*w+sx)*4;float a=p[3]/255.f;
@@ -47,7 +47,7 @@ static unsigned char *fit(const unsigned char *src,int w,int h){
 			}}
 		}
 		else{
-			float fx=(x+.5f)*w/ICON-.5f,fy=(y+.5f)*h/ICON-.5f;
+			float fx=(x+.5f)*w/size-.5f,fy=(y+.5f)*h/size-.5f;
 			int ix=fx<0 ? 0 : (int)fx,iy=fy<0 ? 0 : (int)fy;
 			float tx=fx-ix,ty=fy-iy;if(tx<0){tx=0;}if(ty<0){ty=0;}
 			for(int k=0;k<4;k++){
@@ -57,13 +57,13 @@ static unsigned char *fit(const unsigned char *src,int w,int h){
 			}
 			n=1;
 		}
-		unsigned char *d=dst+((size_t)y*ICON+x)*4;
+		unsigned char *d=dst+((size_t)y*size+x)*4;
 		for(int k=0;k<4;k++){d[k]=(unsigned char)(acc[k]/n+.5f);}
 	}}
 	return dst;
 }
 
-static unsigned char *find_icon(const char *name,char dirs[][256],int ndirs){
+static unsigned char *find_icon(const char *name,char dirs[][256],int ndirs,int size){
 	static const char *sizes[]={"64x64","72x72","96x96","128x128","48x48","256x256","512x512","32x32"};
 	char path[600];
 	int w,h;
@@ -75,7 +75,7 @@ static unsigned char *find_icon(const char *name,char dirs[][256],int ndirs){
 		if(!px && snprintf(path,sizeof(path),"%spixmaps/%s.png",dirs[d],name)<(int)sizeof(path)){px=load_png(path,&w,&h);}
 	}
 	if(!px){return NULL;}
-	unsigned char *icon=fit(px,w,h);
+	unsigned char *icon=fit(px,w,h,size);
 	free(px);
 	return icon;
 }
@@ -155,9 +155,15 @@ int apps_load(struct app **out){
 		closedir(dir);
 	}
 	if(n){qsort(list,n,sizeof(*list),by_name);}
-	for(int i=0;i<n;i++){list[i].icon=find_icon(list[i].icon_name,dirs,ndirs);}
+	for(int i=0;i<n;i++){list[i].icon=find_icon(list[i].icon_name,dirs,ndirs,ICON);}
 	*out=list;
 	return n;
+}
+
+unsigned char *icon_load(const char *name,int size){
+	char dirs[8][256];
+	if(name && !strncmp(name,"file://",7)){name+=7;}
+	return find_icon(name,dirs,data_dirs(dirs,8),size);
 }
 
 void apps_free(struct app *list,int n){

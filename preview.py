@@ -3,16 +3,19 @@
 # the mouse is the touchscreen, the keyboard is the keyboard, F1 / F2 / F3 are
 # the E6 Home / Messages / End keys (hold them for the long press: running
 # apps / shade / close the app)
+# notifications go to a bus of its own, the desktop's one already has a notification daemon
 # usage: preview.py [--size 360x640]
 import os
 import struct
 import subprocess
 import sys
+import time
 import tkinter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'yamashell-preview')
 FRAME = os.path.join(OUT, 'frame.ppm')
+BUS = 'unix:path=' + os.path.join(OUT, 'bus')
 SOCKET = 'wayland-yamashell-preview'
 EV_SYN, EV_KEY, EV_ABS = 0, 1, 3
 ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_MT_POSITION_X, ABS_MT_POSITION_Y = 0x2f, 0x39, 0x35, 0x36
@@ -34,7 +37,16 @@ except FileNotFoundError:
 	pass
 assets = os.path.join(HERE, 'assets')
 data_dirs = os.environ.get('XDG_DATA_DIRS') or '/usr/local/share:/usr/share'
-env = dict(os.environ, YAMASHELL_SIZE=size, XDG_DATA_DIRS=assets + ':' + data_dirs,
+try:
+	os.unlink(os.path.join(OUT, 'bus'))
+except FileNotFoundError:
+	pass
+bus = subprocess.Popen(['dbus-daemon', '--session', '--address=' + BUS, '--nofork', '--nopidfile', '--nosyslog'])
+for _ in range(50):
+	if os.path.exists(os.path.join(OUT, 'bus')):
+		break
+	time.sleep(.1)
+env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=BUS, YAMASHELL_SIZE=size, XDG_DATA_DIRS=assets + ':' + data_dirs,
 	XDG_CONFIG_DIRS=os.path.join(assets, 'xdg') + ':/etc/xdg',
 	YAMASHELL_FONT=os.path.join(assets, 'Ubuntu-Regular.ttf'), YAMASHELL_FONT_LIGHT=os.path.join(assets, 'Ubuntu-Light.ttf'),
 	YAMASHELL_ICONS=os.path.join(assets, 'MaterialIcons-Regular.ttf'), YAMASHELL_WALLPAPER=os.path.join(assets, 'wallpaper.jpg'))
@@ -112,6 +124,7 @@ root.bind('<KeyRelease>', key_release)
 image = None
 poll()
 print(f'yamashell on {SOCKET}: WAYLAND_DISPLAY={SOCKET} <app> opens an app in it')
+print(f'notifications: DBUS_SESSION_BUS_ADDRESS={BUS} notify-send <title> [text]')
 try:
 	root.mainloop()
 except KeyboardInterrupt:
@@ -119,3 +132,5 @@ except KeyboardInterrupt:
 finally:
 	shell.terminate()
 	shell.wait()
+	bus.terminate()
+	bus.wait()

@@ -6,10 +6,12 @@ Status: early. Works on the phone with foot, touch and the keypad. The shell UI 
 
 ## Features
 
-- `wl_compositor`, `wl_subcompositor`, `wl_shm`, `xdg-shell`, `wl_seat` (keyboard, pointer, touch), `wl_data_device` (clipboard)
+- `wl_compositor`, `wl_subcompositor`, `wl_shm`, `xdg-shell`, `wl_seat` (keyboard, pointer, touch), `wl_data_device` (clipboard), `xdg-decoration` (always server side, so apps like foot draw no title bar)
 - evdev input read directly, XKB keymap, tty1 owned while running
 - home screen with the terminal, app menu with every installed app (`.desktop` files, the app's own PNG icon), shade, status bar that stays on top of apps; text via FreeType glyph atlas
-- the shade follows battery, charger and memory card changes (kernel uevents, plus a 10 s check)
+- the app menu and the shade's notes scroll: drag, throw, springy ends; at the top of the menu a pull down closes it, at the end of the notes a push up closes the shade; the D-pad scrolls the focus into view
+- the shade follows battery, charger, usb shell and memory card changes (kernel uevents, plus a 10 s check)
+- notifications: yamashell is the session bus `org.freedesktop.Notifications` server, so `notify-send`, libnotify apps and foot's notifications show up; a new one pops up as a toast (tap = shade, push up = hide, critical ones stay), in the shade it is swiped away sideways (or OK on it with the keys). The icon comes from the `image-path` hint, `app_icon` (name or path) or the sending app's .desktop entry; the status bar shows one small icon per app with notes waiting. session.sh starts the `dbus-daemon`
 - sheets move on a spring: they follow the finger, a fling decides open or closed, and they land with a small bounce
 - touch: left/right edge = back (pull until the arrow pops, Esc to the app), bottom handle = home, pulled further past a dead zone = running apps (on home too), dragging the home bar = app menu, status bar = shade, long press on a running app's icon = close it
 - running apps: a card per window with its live picture; tap opens, swipe sideways browses, swipe a card up closes the app
@@ -24,7 +26,7 @@ Not done: Wayland EGL clients, dmabuf, multiple outputs.
 ./build.sh <out dir> # phone, needs the e6-linux tree around it
 ```
 
-Host needs `wayland-scanner` and the dev packages for wayland-server, xkbcommon, egl, glesv2, freetype2, libpng, libjpeg. `SANITIZE=1` builds the host binary with ASan/UBSan.
+Host needs `wayland-scanner` and the dev packages for wayland-server, xkbcommon, egl, glesv2, freetype2, libpng, libjpeg, libsystemd (sd-bus). `SANITIZE=1` builds the host binary with ASan/UBSan. Tests: `tests/scroll.py`, `dbus-run-session -- tests/notify.py`.
 
 The phone build expects to sit at `linux/yamashell` in e6-linux: it uses e6-linux's alpine sysroot (`linux/initramfs/sysroot.sh`) and links `libvcgl` from the `vc-khrn` build next to the out dir. Normally `linux/kernel/build-vc.sh` builds it and puts it into the initramfs together with `session.sh` and `assets/`.
 
@@ -34,7 +36,7 @@ The phone build expects to sit at `linux/yamashell` in e6-linux: it uses e6-linu
 ./preview.py # or ./preview.py --size 360x640
 ```
 
-Builds the host binary into `~/.cache/yamashell-preview` and shows yamashell in a window: the mouse is the touchscreen, the keyboard is the keyboard, F1 / F2 / F3 are the E6 Home / Messages / End keys (hold for the long press: running apps / shade / close). The app menu lists the PC's own apps; any Wayland app that can draw with `wl_shm` opens inside with `WAYLAND_DISPLAY=wayland-yamashell-preview <app>` (GTK 4 apps with `GSK_RENDERER=cairo`, there is no dmabuf). Needs Python's tkinter (`python3-tkinter` on Fedora).
+Builds the host binary into `~/.cache/yamashell-preview` and shows yamashell in a window: the mouse is the touchscreen, the keyboard is the keyboard, F1 / F2 / F3 are the E6 Home / Messages / End keys (hold for the long press: running apps / shade / close). The app menu lists the PC's own apps; any Wayland app that can draw with `wl_shm` opens inside with `WAYLAND_DISPLAY=wayland-yamashell-preview <app>` (GTK 4 apps with `GSK_RENDERER=cairo`, there is no dmabuf). Notifications go to a private session bus that preview.py starts (the desktop's own bus already has a notification daemon), it prints the `DBUS_SESSION_BUS_ADDRESS=... notify-send <title> [text]` line to use; apps started from the shell's menu get that bus too. Needs Python's tkinter (`python3-tkinter` on Fedora).
 
 ## Run
 

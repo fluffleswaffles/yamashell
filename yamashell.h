@@ -108,6 +108,18 @@ void input_key_tap(struct server *s, uint32_t key);
 struct app{char *name, *exec, *icon_name;unsigned char *icon;bool terminal;pid_t pid;};
 int apps_load(struct app **list);
 void apps_free(struct app *list, int n);
+/* an icon by name (icon theme, pixmaps) or path, size x size premultiplied RGBA or NULL */
+unsigned char *icon_load(const char *name, int size);
+/* a notification from the session bus, expire = milliseconds() when it closes itself, 0 = stays */
+#define MAX_NOTES 32
+/* icon = icon name or path from the sender (image-path hint, app_icon, desktop-entry), may be empty */
+struct note{uint32_t id, expire;char app[48], icon[160], title[96], body[192];bool critical;};
+void notify_init(struct server *s);
+void notify_finish(void);
+int notify_list(const struct note **out);
+void notify_close(uint32_t id);
+/* new_id = the note that just came or changed, 0 when one only went away */
+void ui_notes_changed(struct server *s, uint32_t new_id);
 void ui_init(struct server *s);
 void ui_finish(struct server *s);
 bool ui_key(struct server *s, uint32_t key, uint32_t state);

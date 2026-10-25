@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <stdlib.h>
 #include "yamashell.h"
+#include "xdg-decoration-server.h"
 
 static void destroy(struct wl_client *c, struct wl_resource *r){(void)c; wl_resource_destroy(r);}
 static void noop(struct wl_client *c, struct wl_resource *r){(void)c;(void)r;}
@@ -142,8 +143,23 @@ static void bind_sub(struct wl_client *c,void *data,uint32_t ver,uint32_t id){
 	struct wl_resource *r=wl_resource_create(c,&wl_subcompositor_interface,ver,id);wl_resource_set_implementation(r,&subcompositor_impl,data,NULL);
 }
 
+/* servrside hack for apps  drawing titlebar */
+static void deco_mode(struct wl_client *c,struct wl_resource *r,uint32_t mode){(void)c;(void)mode;zxdg_toplevel_decoration_v1_send_configure(r,ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);}
+static void deco_unset(struct wl_client *c,struct wl_resource *r){deco_mode(c,r,0);}
+static const struct zxdg_toplevel_decoration_v1_interface deco_impl={.destroy=destroy,.set_mode=deco_mode,.unset_mode=deco_unset};
+static void get_deco(struct wl_client *c,struct wl_resource *r,uint32_t id,struct wl_resource *top){
+	(void)top;struct wl_resource *d=wl_resource_create(c,&zxdg_toplevel_decoration_v1_interface,wl_resource_get_version(r),id);
+	if(!d){wl_client_post_no_memory(c);return;}
+	wl_resource_set_implementation(d,&deco_impl,NULL,NULL);deco_unset(c,d);
+}
+static const struct zxdg_decoration_manager_v1_interface deco_manager_impl={.destroy=destroy,.get_toplevel_decoration=get_deco};
+static void bind_deco(struct wl_client *c,void *data,uint32_t ver,uint32_t id){
+	struct wl_resource *r=wl_resource_create(c,&zxdg_decoration_manager_v1_interface,ver,id);wl_resource_set_implementation(r,&deco_manager_impl,data,NULL);
+}
+
 void shell_init(struct server *s){
 	wl_global_create(s->display,&xdg_wm_base_interface,1,s,bind_shell);
 	wl_global_create(s->display,&wl_subcompositor_interface,1,s,bind_sub);
+	wl_global_create(s->display,&zxdg_decoration_manager_v1_interface,1,s,bind_deco);
 }
 
