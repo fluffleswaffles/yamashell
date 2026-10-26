@@ -3,12 +3,10 @@
 unset YAMASHELL_FPS
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}
 export WAYLAND_DISPLAY=wayland-vc SHELL=/bin/sh
-# our foot.ini (bigger font) comes before the stock one
-export XDG_CONFIG_DIRS=/usr/share/yamashell/xdg:/etc/xdg
 export YAMASHELL_STATS="$XDG_RUNTIME_DIR/yamashell.stats"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
-# session bus: notifications (notify-send, foot) go through it to the shell
+# session bus: notifications (notify-send, libnotify apps) go through it to the shell
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 # yamashell.size=360x640 on the kernel command line for portrait panels
 size=$(sed -n 's/.*yamashell\.size=\([0-9]*x[0-9]*\).*/\1/p' /proc/cmdline)

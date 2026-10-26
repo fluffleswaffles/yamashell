@@ -10,4 +10,4 @@ Installed to `/usr/share/yamashell/` by `linux/kernel/build-vc.sh`. The fonts an
 
 Icons are looked up by Unicode code point (the font has no glyph names); the code points in `ui.c` come from the font's `codepoints` file and were checked against this exact font.
 
-`applications/` overrides the stock foot entries: foot itself shows as "Terminal" (the app marked `TerminalEmulator` goes on the home screen), Foot Client and Foot Server are hidden. `xdg/foot/foot.ini` gives foot a 12 pt font, readable on the 2.46" panel; `session.sh` puts it in front of `/etc/xdg` via `XDG_CONFIG_DIRS`.
+`applications/Alacritty.desktop` overrides the stock entry: alacritty shows as "Terminal" (the app marked `TerminalEmulator` goes on the home screen and is started with the session). Its icon is the stock scalable one from the alacritty package. The font size and the renderer come from `/etc/alacritty/alacritty.toml` (`linux/initramfs/alacritty.toml` in the e6-linux tree).

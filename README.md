@@ -2,16 +2,16 @@
 
 Small Wayland compositor and shell for the Nokia E6, part of [rapuyama-linux](https://github.com/fluffleswaffles/rapuyama-linux). Clients draw into `wl_shm` buffers, yamashell keeps one texture per surface, uploads only the damage and composes the scene with GLES 2 on the phone's VideoCore (`libvcgl` + `/dev/vc-khrn` from e6-linux). Output is two fullscreen RGB565 EGL surfaces presented in turn.
 
-Status: early. Works on the phone with foot, touch and the keypad. The shell UI (home, app menu, shade, status bar) is a first draft. Landscape 640x480 (E6) and portrait (360x640, N8/E7) layouts, checked on the PC; only the E6 panel is driven by the kernel so far.
+Status: early. Works on the phone with alacritty (drawn on the VC through libvcgl), touch and the keypad. The shell UI (home, app menu, shade, status bar) is a first draft. Landscape 640x480 (E6) and portrait (360x640, N8/E7) layouts, checked on the PC; only the E6 panel is driven by the kernel so far.
 
 ## Features
 
-- `wl_compositor`, `wl_subcompositor`, `wl_shm`, `xdg-shell`, `wl_seat` (keyboard, pointer, touch), `wl_data_device` (clipboard), `xdg-decoration` (always server side, so apps like foot draw no title bar)
+- `wl_compositor`, `wl_subcompositor`, `wl_shm`, `xdg-shell`, `wl_seat` (keyboard, pointer, touch), `wl_data_device` (clipboard), `xdg-decoration` (always server side, so apps draw no title bar)
 - evdev input read directly, XKB keymap, tty1 owned while running
-- home screen with the terminal, app menu with every installed app (`.desktop` files, the app's own PNG icon), shade, status bar that stays on top of apps; text via FreeType glyph atlas
+- home screen with the terminal, app menu with every installed app (`.desktop` files, the app's own PNG or SVG icon, SVG rasterized with the bundled [nanosvg](third_party/nanosvg)), shade, status bar that stays on top of apps; text via FreeType glyph atlas
 - the app menu and the shade's notes scroll: drag, throw, springy ends; at the top of the menu a pull down closes it, at the end of the notes a push up closes the shade; the D-pad scrolls the focus into view
 - the shade follows battery, charger, usb shell and memory card changes (kernel uevents, plus a 10 s check)
-- notifications: yamashell is the session bus `org.freedesktop.Notifications` server, so `notify-send`, libnotify apps and foot's notifications show up; a new one pops up as a toast (tap = shade, push up = hide, critical ones stay), in the shade it is swiped away sideways (or OK on it with the keys). The icon comes from the `image-path` hint, `app_icon` (name or path) or the sending app's .desktop entry; the status bar shows one small icon per app with notes waiting. session.sh starts the `dbus-daemon`
+- notifications: yamashell is the session bus `org.freedesktop.Notifications` server, so `notify-send` and libnotify apps show up; a new one pops up as a toast (tap = shade, push up = hide, critical ones stay), in the shade it is swiped away sideways (or OK on it with the keys). The icon comes from the `image-path` hint, `app_icon` (name or path) or the sending app's .desktop entry; the status bar shows one small icon per app with notes waiting. session.sh starts the `dbus-daemon`
 - sheets move on a spring: they follow the finger, a fling decides open or closed, and they land with a small bounce
 - touch: left/right edge = back (pull until the arrow pops, Esc to the app), bottom handle = home, pulled further past a dead zone = running apps (on home too), dragging the home bar = app menu, status bar = shade, long press on a running app's icon = close it
 - running apps: a card per window with its live picture; tap opens, swipe sideways browses, swipe a card up closes the app
@@ -59,15 +59,15 @@ yamashell --socket wayland-vc --ui
 | `YAMASHELL_STATS` | file with cumulative frame / upload / present counters, updated once a second |
 | `YAMASHELL_SIZE` | output size `WxH`, default `640x480`; session.sh takes it from `yamashell.size=` on the kernel command line |
 | `YAMASHELL_FPS` | repaint rate cap, 30-240 (session.sh unsets it) |
-| `XDG_DATA_DIRS` | where `applications/*.desktop` and `icons/hicolor/*/apps/*.png` are looked up, after `/usr/share/yamashell/` |
+| `XDG_DATA_DIRS` | where `applications/*.desktop`, `icons/hicolor/*/apps/*.png` and `icons/hicolor/scalable/apps/*.svg` are looked up, after `/usr/share/yamashell/` |
 | `YAMASHELL_WALLPAPER`, `YAMASHELL_FONT`, `YAMASHELL_FONT_LIGHT`, `YAMASHELL_ICONS` | replace the default assets, see [assets/README.md](assets/README.md) |
 
-`session.sh` (installed as `yamashell-session`) waits for `/dev/vc-khrn`, starts the compositor on `wayland-vc` with one terminal and points foot at the bundled `foot.ini`. Other clients connect with:
+`session.sh` (installed as `yamashell-session`) waits for `/dev/vc-khrn`, starts the compositor on `wayland-vc` with one terminal (the app marked `TerminalEmulator`, alacritty). Other clients connect with:
 
 ```sh
-XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-vc foot
+XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-vc alacritty
 ```
 
 ## License
 
-GPL-2.0-only, see [LICENSE](LICENSE). Bundled fonts, icons and wallpaper keep their own licenses, see [assets/README.md](assets/README.md).
+GPL-2.0-only, see [LICENSE](LICENSE). Bundled fonts, icons and wallpaper keep their own licenses, see [assets/README.md](assets/README.md); nanosvg is under the zlib license, see [third_party/nanosvg/LICENSE.txt](third_party/nanosvg/LICENSE.txt).

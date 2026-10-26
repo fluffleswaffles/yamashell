@@ -7,7 +7,7 @@
 #include <EGL/eglext.h>
 
 #ifndef YAMASHELL_HOST
-extern EGLBoolean vcglPresent(EGLDisplay, EGLSurface, EGLSurface);
+extern GLboolean vcglTextureImage(GLuint id0, GLuint id1);
 /* libvcgl's native window (vc-khrn gl.h) */
 struct vc_window{int x, y, width, height;};
 #endif
@@ -46,8 +46,6 @@ bool renderer_init(struct server *s){
 	static struct vc_window win;
 	win=(struct vc_window){0, 0, screen_w, screen_h};
 	s->egl_surface=eglCreateWindowSurface(s->egl_display, cfg, (EGLNativeWindowType)&win, NULL);
-	s->egl_front=eglCreateWindowSurface(s->egl_display, cfg, (EGLNativeWindowType)&win, NULL);
-	if(s->egl_front==EGL_NO_SURFACE){goto fail;}
 #endif
 	if(s->egl_context==EGL_NO_CONTEXT || s->egl_surface==EGL_NO_SURFACE ||
 		!eglMakeCurrent(s->egl_display, s->egl_surface, s->egl_surface, s->egl_context)){goto fail;}
@@ -107,6 +105,7 @@ bool renderer_upload(struct surface *v, struct wl_shm_buffer *b, struct rect r, 
 	GLenum format=rgb565 ? GL_RGB : GL_RGBA,type=rgb565 ? GL_UNSIGNED_SHORT_5_6_5 : GL_UNSIGNED_BYTE;
 	if(width<=0 || height<=0 || width>4096 || height>4096 || stride<width*4){return false;}
 	if(fresh){r=(struct rect){0, 0, width, height};}
+	if(v->vc){v->texture=0;v->vc=false;}
 	if(r.x<0 || r.y<0 || r.w<0 || r.h<0 || r.x>width-r.w || r.y>height-r.h){return false;}
 	if(!v->texture){glGenTextures(1, &v->texture);}
 	glBindTexture(GL_TEXTURE_2D, v->texture);
@@ -140,6 +139,29 @@ bool renderer_upload(struct surface *v, struct wl_shm_buffer *b, struct rect r, 
 	return glGetError()==GL_NO_ERROR;
 }
 
+
+bool renderer_vc_buffer(struct vc_buffer *b){
+#ifdef YAMASHELL_HOST
+	(void)b;return false;
+#else
+	glGenTextures(1, &b->texture);
+	glBindTexture(GL_TEXTURE_2D, b->texture);
+	if(!vcglTextureImage(b->id0, b->id1)){return false;}
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	return glGetError()==GL_NO_ERROR;
+#endif
+}
+void renderer_vc_free(struct vc_buffer *b){
+	if(b->texture){glDeleteTextures(1, &b->texture); b->texture=0;}
+}
+void renderer_import(struct surface *v, const struct vc_buffer *b){
+	if(!v->vc){renderer_drop(v);}
+	v->texture=b->texture;v->rgb565=true;v->vc=true;
+}
+
 void renderer_quad(struct server *s, float l, float t, float r, float b, bool opaque){
 	if(opaque){glUseProgram(s->opaque_program);glDisable(GL_BLEND);}
 	glUniform4f(opaque ? s->opaque_bounds : s->bounds,l,t,r-l,b-t);
@@ -166,7 +188,8 @@ static void draw(struct surface *v){
 	glBindTexture(GL_TEXTURE_2D, v->texture);
 	glUniform1f(v->server->alpha, v->opaque ? 1.f : 0.f);
 	glUniform1f(v->server->native, v->rgb565 ? 1.f : 0.f);
-	renderer_quad(v->server,l,t,r,b,v->opaque && v->rgb565);
+	if(v->vc){renderer_quad(v->server,l,b,r,t,v->opaque);}
+	else{renderer_quad(v->server,l,t,r,b,v->opaque && v->rgb565);}
 }
 
 /* a window's texture anywhere on screen, in pixels: the task switcher's cards */
@@ -176,7 +199,9 @@ void renderer_thumb(struct surface *v, float x, float y, float w, float h){
 	glBindTexture(GL_TEXTURE_2D, v->texture);
 	glUniform1f(s->alpha, v->opaque ? 1.f : 0.f);
 	glUniform1f(s->native, v->rgb565 ? 1.f : 0.f);
-	renderer_quad(s,2.f*x/screen_w-1.f,1.f-2.f*y/screen_h,2.f*(x+w)/screen_w-1.f,1.f-2.f*(y+h)/screen_h,v->opaque && v->rgb565);
+	float l=2.f*x/screen_w-1.f, t=1.f-2.f*y/screen_h, r=2.f*(x+w)/screen_w-1.f, b=1.f-2.f*(y+h)/screen_h;
+	if(v->vc){renderer_quad(s,l,b,r,t,v->opaque);}
+	else{renderer_quad(s,l,t,r,b,v->opaque && v->rgb565);}
 }
 
 bool renderer_frame(struct server *s){
@@ -206,12 +231,7 @@ bool renderer_frame(struct server *s){
 		if(fclose(f) || rename(path,s->capture)){free(pixels);return false;} free(pixels);
 	}
 #endif
-#ifdef YAMASHELL_HOST
 	if(!eglSwapBuffers(s->egl_display,s->egl_surface)){return false;}
-#else
-	if(!vcglPresent(s->egl_display,s->egl_surface,s->egl_front)){return false;}
-	EGLSurface back=s->egl_front;s->egl_front=s->egl_surface;s->egl_surface=back;
-#endif
 	if(glGetError()!=GL_NO_ERROR){return false;}
 	s->present_ms+=(uint32_t)(milliseconds()-started);
 	s->frames++;
@@ -219,14 +239,14 @@ bool renderer_frame(struct server *s){
 }
 
 void renderer_drop(struct surface *v){
-	if(v->texture){glDeleteTextures(1, &v->texture); v->texture=0;}
+	if(v->texture && !v->vc){glDeleteTextures(1, &v->texture);}
+	v->texture=0;v->vc=false;
 }
 void renderer_finish(struct server *s){
 	if(s->quad){glDeleteBuffers(1,&s->quad);}
 	if(s->program){glDeleteProgram(s->program);}
 	if(s->opaque_program){glDeleteProgram(s->opaque_program);}
 	eglMakeCurrent(s->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-	if(s->egl_front!=EGL_NO_SURFACE){eglDestroySurface(s->egl_display,s->egl_front);}
 	if(s->egl_surface!=EGL_NO_SURFACE){eglDestroySurface(s->egl_display, s->egl_surface);}
 	if(s->egl_context!=EGL_NO_CONTEXT){eglDestroyContext(s->egl_display, s->egl_context);}
 	eglTerminate(s->egl_display);

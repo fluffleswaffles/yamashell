@@ -47,7 +47,6 @@ for _ in range(50):
 		break
 	time.sleep(.1)
 env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=BUS, YAMASHELL_SIZE=size, XDG_DATA_DIRS=assets + ':' + data_dirs,
-	XDG_CONFIG_DIRS=os.path.join(assets, 'xdg') + ':/etc/xdg',
 	YAMASHELL_FONT=os.path.join(assets, 'Ubuntu-Regular.ttf'), YAMASHELL_FONT_LIGHT=os.path.join(assets, 'Ubuntu-Light.ttf'),
 	YAMASHELL_ICONS=os.path.join(assets, 'MaterialIcons-Regular.ttf'), YAMASHELL_WALLPAPER=os.path.join(assets, 'wallpaper.jpg'))
 read_end, write_end = os.pipe()

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* installed apps from .desktop files (XDG desktop entry spec, the parts that
- * matter here) with their own PNG icons scaled to ICON pixels */
+ * matter here) with their own PNG or SVG icons scaled to ICON pixels */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +9,14 @@
 #include <dirent.h>
 #include <png.h>
 #include "yamashell.h"
+/* THIS IS THIRD PARTY!!!!! */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#define NANOSVG_IMPLEMENTATION
+#include "third_party/nanosvg/nanosvg.h"
+#define NANOSVGRAST_IMPLEMENTATION
+#include "third_party/nanosvg/nanosvgrast.h"
+#pragma GCC diagnostic pop
 
 #define ASSETS "/usr/share/yamashell/"
 
@@ -31,6 +39,20 @@ static unsigned char *load_png(const char *path,int *w,int *h){
 	*w=(int)img.width;*h=(int)img.height;
 	return px;
 }
+
+static unsigned char *load_svg(const char *path,int size,int *w,int *h){
+	NSVGimage *img=nsvgParseFromFile(path,"px",96);
+	if(!img){return NULL;}
+	float big=img->width>img->height ? img->width : img->height,s=big>0 ? size/big : 0;
+	NSVGrasterizer *r=s>0 ? nsvgCreateRasterizer() : NULL;
+	unsigned char *px=r ? calloc((size_t)size*size,4) : NULL;
+	if(px){nsvgRasterize(r,img,(size-img->width*s)/2,(size-img->height*s)/2,s,px,size,size,size*4);*w=*h=size;}
+	if(r){nsvgDeleteRasterizer(r);}
+	nsvgDelete(img);
+	return px;
+}
+
+static bool is_svg(const char *path){size_t n=strlen(path);return n>4 && !strcasecmp(path+n-4,".svg");}
 
 /* box filter down, bilinear up, premultiplied for the shader */
 static unsigned char *fit(const unsigned char *src,int w,int h,int size){
@@ -69,10 +91,12 @@ static unsigned char *find_icon(const char *name,char dirs[][256],int ndirs,int 
 	int w,h;
 	unsigned char *px=NULL;
 	if(!name || !*name){return NULL;}
-	if(name[0]=='/'){px=load_png(name,&w,&h);}
+	if(name[0]=='/'){px=is_svg(name) ? load_svg(name,size,&w,&h) : load_png(name,&w,&h);}
 	for(int d=0;d<ndirs && !px;d++){
 		for(size_t i=0;i<sizeof(sizes)/sizeof(*sizes) && !px;i++){if(snprintf(path,sizeof(path),"%sicons/hicolor/%s/apps/%s.png",dirs[d],sizes[i],name)<(int)sizeof(path)){px=load_png(path,&w,&h);}}
+		if(!px && snprintf(path,sizeof(path),"%sicons/hicolor/scalable/apps/%s.svg",dirs[d],name)<(int)sizeof(path)){px=load_svg(path,size,&w,&h);}
 		if(!px && snprintf(path,sizeof(path),"%spixmaps/%s.png",dirs[d],name)<(int)sizeof(path)){px=load_png(path,&w,&h);}
+		if(!px && snprintf(path,sizeof(path),"%spixmaps/%s.svg",dirs[d],name)<(int)sizeof(path)){px=load_svg(path,size,&w,&h);}
 	}
 	if(!px){return NULL;}
 	unsigned char *icon=fit(px,w,h,size);
@@ -84,7 +108,7 @@ static char *exec_line(const char *v,bool terminal){
 	size_t n=strlen(v);
 	char *out=malloc(n+16),*o=out;
 	if(!out){return NULL;}
-	if(terminal){o+=sprintf(o,"foot -e ");}
+	if(terminal){o+=sprintf(o,"alacritty -e ");}
 	for(const char *p=v;*p;p++){
 		if(*p=='%' && p[1]){if(p[1]=='%'){*o++='%';}p++;continue;}
 		*o++=*p;

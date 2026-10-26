@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* org.freedesktop.Notifications on the session bus, so notify-send, libnotify
- * apps and foot's notifications all land in the shell */
+ * apps land in the shell */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=Terminal
-Exec=foot
-Icon=foot
+Name=Alacritty
+Exec=alacritty
+Icon=Alacritty
 Terminal=false
 Categories=System;TerminalEmulator;

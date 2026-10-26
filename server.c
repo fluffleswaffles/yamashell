@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include "yamashell.h"
+#include "e6-vc-image-server.h"
 
 struct region{struct rect opaque;};
 struct callback{struct wl_resource *resource; struct wl_list link;};
@@ -28,19 +29,24 @@ static void callbacks_finish(struct wl_list *list, bool done){
 	}
 }
 
+static void buffer_forget(struct surface_state *state);
+
 static int repaint(void *data){
 	struct server *s=data;
 	struct surface *v;
 	s->repaint_pending=false;
 	s->repaint_started=milliseconds();
+	/* textures already hold the commits */
+	wl_list_for_each(v, &s->surfaces, link){if(surface_visible(v)){callbacks_finish(&v->callbacks, true);}}
+	wl_display_flush_clients(s->display);
 	if(s->dirty && !renderer_frame(s)){
 		fprintf(stderr, "yamashell: frame failed (EGL %#x)\n", eglGetError());
 		wl_display_terminate(s->display); return 0;
 	}
 	s->dirty=false;
+	/* done*/
+	if(s->retire){wl_list_for_each(v, &s->surfaces, link){buffer_forget(&v->retired);} s->retire=false;}
 	if(ui_animating(s)){schedule_repaint(s,true);}
-	wl_list_for_each(v, &s->surfaces, link){if(surface_visible(v)){callbacks_finish(&v->callbacks, true);}}
-	wl_display_flush_clients(s->display);
 	return 0;
 }
 
@@ -133,6 +139,42 @@ static void buffer_forget(struct surface_state *state){
 	if(state->buffer){buffer_use_drop(state,true);wl_list_remove(&state->buffer_destroy.link); wl_list_init(&state->buffer_destroy.link); state->buffer=NULL;}
 }
 
+static void buffer_move(struct surface_state *to, struct surface_state *from){
+	to->buffer=from->buffer;to->use=from->use;
+	wl_list_remove(&from->buffer_destroy.link);wl_list_init(&from->buffer_destroy.link);
+	if(to->buffer){to->buffer_destroy.notify=buffer_gone;wl_resource_add_destroy_listener(to->buffer,&to->buffer_destroy);}
+	from->buffer=NULL;from->use=NULL;
+}
+
+static void vc_buffer_destroy(struct wl_client *c, struct wl_resource *r){(void)c;wl_resource_destroy(r);}
+static const struct wl_buffer_interface vc_buffer_impl={vc_buffer_destroy};
+static struct vc_buffer *vc_buffer_get(struct wl_resource *r){
+	return wl_resource_instance_of(r,&wl_buffer_interface,&vc_buffer_impl) ? wl_resource_get_user_data(r) : NULL;
+}
+static void vc_buffer_free(struct wl_resource *r){
+	struct vc_buffer *b=wl_resource_get_user_data(r);
+	struct surface *v;
+
+	wl_list_for_each(v,&b->server->surfaces,link){if(v->vc && v->texture==b->texture){v->texture=0;v->vc=false;v->mapped=false;schedule_repaint(b->server,true);}}
+	renderer_vc_free(b);free(b);
+}
+static void vc_image_create(struct wl_client *c, struct wl_resource *r, uint32_t id, uint32_t id0, uint32_t id1, int32_t w, int32_t h, uint32_t format){
+	if(w<1 || h<1 || w>2048 || h>2048){wl_resource_post_error(r,E6_VC_IMAGE_ERROR_INVALID_SIZE,"image size out of range");return;}
+	struct vc_buffer *b=calloc(1,sizeof(*b));
+	struct wl_resource *br=b ? wl_resource_create(c,&wl_buffer_interface,1,id) : NULL;
+	if(!br){free(b);wl_client_post_no_memory(c);return;}
+	*b=(struct vc_buffer){wl_resource_get_user_data(r),id0,id1,w,h,format,0};
+	if(!renderer_vc_buffer(b)){free(b);wl_resource_destroy(br);wl_resource_post_error(r,E6_VC_IMAGE_ERROR_INVALID_SIZE,"vc image import failed");return;}
+	wl_resource_set_implementation(br,&vc_buffer_impl,b,vc_buffer_free);
+}
+static void vc_image_destroy(struct wl_client *c, struct wl_resource *r){(void)c;wl_resource_destroy(r);}
+static const struct e6_vc_image_interface vc_image_impl={vc_image_create,vc_image_destroy};
+static void bind_vc_image(struct wl_client *c, void *data, uint32_t ver, uint32_t id){
+	struct wl_resource *r=wl_resource_create(c,&e6_vc_image_interface,ver,id);
+	if(!r){wl_client_post_no_memory(c);return;}
+	wl_resource_set_implementation(r,&vc_image_impl,data,NULL);
+}
+
 static void state_init(struct surface_state *state, struct surface *v){
 	*state=(struct surface_state){.surface=v};
 	wl_list_init(&state->callbacks);wl_list_init(&state->damages);wl_list_init(&state->buffer_destroy.link);
@@ -184,7 +226,7 @@ static void surface_destroy(struct wl_resource *r){
 	if(s->pointer_focus==v){s->pointer_focus=NULL;}
 	if(s->touch_focus==v){s->touch_focus=NULL;}
 	if(s->cursor==v){s->cursor=NULL;}
-	buffer_forget(&v->pending); buffer_forget(&v->cache);
+	buffer_forget(&v->pending); buffer_forget(&v->cache); buffer_forget(&v->shown); buffer_forget(&v->retired);
 	damages_finish(&v->pending);damages_finish(&v->cache);
 	callbacks_finish(&v->callbacks, false); callbacks_finish(&v->pending.callbacks, false); callbacks_finish(&v->cache.callbacks, false);
 	renderer_drop(v); wl_list_remove(&v->link); free(v);
@@ -273,19 +315,22 @@ void surface_apply(struct surface *v){
 		if(state->attached){
 			v->content_x+=state->x; v->content_y+=state->y;
 			if(state->buffer){
-				struct wl_shm_buffer *b=wl_shm_buffer_get(state->buffer);
-				if(!b){wl_resource_post_error(v->resource, WL_DISPLAY_ERROR_INVALID_OBJECT, "only wl_shm buffers are supported"); return;}
-				uint32_t fmt=wl_shm_buffer_get_format(b);
+				struct vc_buffer *vb=vc_buffer_get(state->buffer);
+				struct wl_shm_buffer *b=vb ? NULL : wl_shm_buffer_get(state->buffer);
+				if(!vb && !b){wl_resource_post_error(v->resource, WL_DISPLAY_ERROR_INVALID_OBJECT, "only wl_shm and e6_vc_image buffers are supported"); return;}
+				uint32_t fmt=b ? wl_shm_buffer_get_format(b) : WL_SHM_FORMAT_ARGB8888;
 				if(fmt!=WL_SHM_FORMAT_ARGB8888 && fmt!=WL_SHM_FORMAT_XRGB8888){wl_resource_post_error(v->resource, WL_DISPLAY_ERROR_INVALID_OBJECT, "unsupported shm format"); return;}
-				int w=wl_shm_buffer_get_width(b), h=wl_shm_buffer_get_height(b);
+				int w=vb ? vb->width : wl_shm_buffer_get_width(b), h=vb ? vb->height : wl_shm_buffer_get_height(b);
 				if(w%v->scale || h%v->scale){wl_resource_post_error(v->resource,WL_SURFACE_ERROR_INVALID_SIZE,"buffer size is not divisible by scale");return;}
 				struct rect hint=v->opaque_region;
-				bool opaque=fmt==WL_SHM_FORMAT_XRGB8888 || (hint.w>0 && hint.h>0 &&
+				bool opaque=vb ? (vb->format&7)>=2 : fmt==WL_SHM_FORMAT_XRGB8888 || (hint.w>0 && hint.h>0 &&
 					hint.x<=v->content_x && hint.y<=v->content_y &&
 					hint.x+hint.w>=v->content_x+w/v->scale && hint.y+hint.h>=v->content_y+h/v->scale);
-				fresh=!v->texture || w!=v->width || h!=v->height || v->opaque!=opaque;
+
+				fresh=!v->texture || w!=v->width || h!=v->height || v->opaque!=opaque || v->vc;
 				bool uploaded=false,ok=true;
-				if(fresh){ok=renderer_upload(v,b,(struct rect){0},true,opaque);uploaded=true;}
+				if(vb){renderer_import(v,vb);uploaded=true;}
+				else if(fresh){ok=renderer_upload(v,b,(struct rect){0},true,opaque);uploaded=true;}
 				else{
 					struct damage_rect *d;
 					damage_merge(state,v,w,h);
@@ -297,13 +342,15 @@ void surface_apply(struct surface *v){
 						uploaded=true;
 					}
 				}
-				if(!ok){wl_resource_post_error(v->resource,WL_DISPLAY_ERROR_IMPLEMENTATION,"texture upload failed");return;}
+				if(!ok){wl_resource_post_error(v->resource,WL_DISPLAY_ERROR_IMPLEMENTATION,vb ? "vc image import failed" : "texture upload failed");return;}
 				v->width=w;v->height=h;v->opaque=opaque;
 				changed|=uploaded || !v->mapped;
 				bool was_mapped=v->mapped;v->mapped=true;
 				if(!was_mapped){surface_output(v,true);if(!v->subsurface && !v->cursor){surface_focus(v);if(v->xdg && !v->parent){ui_window_mapped(s,v);}}}
-				buffer_forget(state);
+				if(vb){buffer_forget(&v->retired);buffer_move(&v->retired,&v->shown);buffer_move(&v->shown,state);s->retire=true;}
+				else{buffer_forget(&v->shown);buffer_forget(&v->retired);buffer_forget(state);}
 			}else{
+				buffer_forget(&v->shown);buffer_forget(&v->retired);
 				if(v->mapped){surface_output(v,false);}
 				changed|=v->mapped;v->mapped=false;renderer_drop(v);
 				if(v->xdg){v->configured=false;v->acked=false;}
@@ -360,7 +407,7 @@ static void create_surface(struct wl_client *c, struct wl_resource *r, uint32_t 
 	v->server=s; v->scale=1;
 	v->resource=wl_resource_create(c,&wl_surface_interface,wl_resource_get_version(r),id);
 	if(!v->resource){free(v); wl_client_post_no_memory(c); return;}
-	wl_list_init(&v->callbacks); state_init(&v->pending,v);state_init(&v->cache,v);
+	wl_list_init(&v->callbacks); state_init(&v->pending,v);state_init(&v->cache,v);state_init(&v->shown,v);state_init(&v->retired,v);
 	wl_list_insert(s->surfaces.prev,&v->link);
 	wl_resource_set_implementation(v->resource,&surface_impl,v,surface_destroy);
 }
@@ -460,6 +507,7 @@ int main(int argc, char **argv){
 	if(s.stats_path){s.stats=wl_event_loop_add_timer(s.loop,stats_write,&s);stats_write(&s);}
 	wl_global_create(s.display,&wl_compositor_interface,4,&s,bind_compositor);
 	wl_global_create(s.display,&wl_output_interface,3,&s,bind_output);
+	wl_global_create(s.display,&e6_vc_image_interface,1,&s,bind_vc_image);
 	if(wl_display_init_shm(s.display)<0){return 1;}
 	shell_init(&s); data_init(&s); input_init(&s);
 	/* the shell UI is on by default; headless window tests opt in with --ui */

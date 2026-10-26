@@ -10,6 +10,8 @@ wayland-scanner client-header "$HERE/protocol/xdg-shell.xml" "$OUT/xdg-shell-cli
 wayland-scanner private-code "$HERE/protocol/xdg-shell.xml" "$OUT/xdg-shell.c"
 wayland-scanner server-header "$HERE/protocol/xdg-decoration-unstable-v1.xml" "$OUT/xdg-decoration-server.h"
 wayland-scanner private-code "$HERE/protocol/xdg-decoration-unstable-v1.xml" "$OUT/xdg-decoration.c"
+wayland-scanner server-header "$TOP/linux/vc-khrn/protocol/e6-vc-image.xml" "$OUT/e6-vc-image-server.h"
+wayland-scanner private-code "$TOP/linux/vc-khrn/protocol/e6-vc-image.xml" "$OUT/e6-vc-image.c"
 if [ "${2:-}" = host ]; then
 	CC=("${HOST_CC:-cc}" -DYAMASHELL_HOST)
 	if [ -n "${SANITIZE:-}" ]; then
@@ -25,5 +27,5 @@ else
 	FLAGS=(-I"$SYSROOT/usr/include/freetype2" -I"$SYSROOT/usr/include/elogind" -L"$OUT/../vc-khrn" -lvcgl -lwayland-server -lxkbcommon -lfreetype -lpng16 -ljpeg -lelogind -lm)
 fi
 "${CC[@]}" -std=gnu11 -O2 -g -Wall -Wextra -Werror -I"$OUT" -I"$HERE" \
-	"$HERE/server.c" "$HERE/render.c" "$HERE/shell.c" "$HERE/input.c" "$HERE/data.c" "$HERE/console.c" "$HERE/ui.c" "$HERE/draw.c" "$HERE/status.c" "$HERE/shade.c" "$HERE/tasks.c" "$HERE/apps.c" "$HERE/notify.c" "$OUT/xdg-shell.c" "$OUT/xdg-decoration.c" \
+	"$HERE/server.c" "$HERE/render.c" "$HERE/shell.c" "$HERE/input.c" "$HERE/data.c" "$HERE/console.c" "$HERE/ui.c" "$HERE/draw.c" "$HERE/status.c" "$HERE/shade.c" "$HERE/tasks.c" "$HERE/apps.c" "$HERE/notify.c" "$OUT/xdg-shell.c" "$OUT/xdg-decoration.c" "$OUT/e6-vc-image.c" \
 	-o "$OUT/yamashell" "${FLAGS[@]}"
