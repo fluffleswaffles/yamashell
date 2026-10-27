@@ -11,8 +11,10 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/inotify.h>
 #include <linux/input.h>
 #include "ui.h"
+#include "config.h"
 
 static bool running(struct app *a){return a->pid>0 && kill(a->pid,0)==0;}
 /* the app's own icon, or its first letter on a tile when it has none */
@@ -139,16 +141,22 @@ static void launch(struct server *s,int i){
 	spring_to(&u->menu,0);schedule_repaint(s,true);
 }
 
-void ui_start_terminal(struct server *s){
-	if(s->ui && s->ui->terminal>=0){launch(s,s->ui->terminal);}
-}
-
 static int reap(int sig,void *data){
 	struct server *s=data;struct ui *u=s->ui;
 	(void)sig;
 	pid_t pid;
 	while((pid=waitpid(-1,NULL,WNOHANG))>0){for(int i=0;i<u->napps;i++){if(u->apps[i].pid==pid){u->apps[i].pid=0;u->dirty=true;}}}
 	if(u->dirty){schedule_repaint(s,true);}
+	return 0;
+}
+
+/* settings saved by another process */
+static int conf_changed(int fd,uint32_t mask,void *data){
+	struct server *s=data;struct ui *u=s->ui;char buf[4096],w[300]="";
+	(void)mask;
+	while(read(fd,buf,sizeof(buf))>0){}
+	config_get("wallpaper",w,sizeof(w));
+	if(strcmp(w,u->wall_conf)){snprintf(u->wall_conf,sizeof(u->wall_conf),"%s",w);wallpaper(u);schedule_repaint(s,true);}
 	return 0;
 }
 
@@ -217,6 +225,7 @@ static void activate(struct server *s,struct item *it){
 	else if(it->act==A_MENU){open_menu(s,true);}
 	else if(it->act==A_CLOSE){spring_to(&u->shade,0);}
 	else if(it->act==A_NOTE){const struct note *n;if(it->arg<notify_list(&n)){swipe_start(u,n[it->arg].id);swipe_away(u,1);}}
+	else if(it->act==A_SLIDER){}
 	else if(it->act==A_TOGGLE && !toggles[it->arg].na){toggles[it->arg].on=!toggles[it->arg].on;u->dirty=true;}
 	schedule_repaint(s,true);
 }
@@ -308,6 +317,9 @@ bool ui_key(struct server *s,uint32_t key,uint32_t state){
 	u->keys=true;
 	if(key==KEY_UP){move_focus(u,0,-1,s);return true;}
 	if(key==KEY_DOWN){move_focus(u,0,1,s);return true;}
+	/* left / right move a focused slider instead of the focus */
+	struct item *f=u->focus>=0 && owner(u->items[u->focus].layer)==active_layer(u) ? &u->items[u->focus] : NULL;
+	if(f && f->act==A_SLIDER && (key==KEY_LEFT || key==KEY_RIGHT)){slider_step(s,f,key==KEY_LEFT ? -10 : 10);return true;}
 	if(key==KEY_LEFT){move_focus(u,-1,0,s);return true;}
 	if(key==KEY_RIGHT){move_focus(u,1,0,s);return true;}
 	if(key==KEY_OK || key==KEY_ENTER){
@@ -346,8 +358,13 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 		if(toast_shown(u) && y>=STATUS+6 && y<STATUS+6+TOAST_H){u->gesture=G_TOAST;}
 		else if(x<EDGE){u->gesture=G_BACK_L;}
 		else if(x>screen_w-EDGE){u->gesture=G_BACK_R;}
-		else if(is_open(&u->shade)){u->gesture=G_SHADE;}
-		else if(y<STATUS+6){u->gesture=G_SHADE_OPEN;}
+		else if(is_open(&u->shade)){
+			struct item *it=item_at(u,x,y);
+			u->gesture=it && it->act==A_SLIDER ? G_SLIDER : G_SHADE;
+			if(it && it->act==A_SLIDER){u->focus=(int)(it-u->items);slider_set(s,it,x);}
+		}
+		/* the sliders show what the settings app set meanwhile */
+		else if(y<STATUS+6){u->gesture=G_SHADE_OPEN;u->dirty=true;}
 		else if(is_open(&u->tasks)){u->gesture=G_TASKS;}
 		else if(is_open(&u->menu)){u->gesture=G_MENU;}
 		/* the bottom handle is home / running apps everywhere, on home the bar pulls the app menu */
@@ -386,6 +403,7 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 			struct item *it=item_at(u,u->x0,u->y0);const struct note *n;
 			if(it && it->act==A_NOTE && it->arg<notify_list(&n)){swipe_start(u,n[it->arg].id);u->gesture=G_NOTE;u->x=0;}
 		}
+		if(u->gesture==G_SLIDER){slider_set(s,&u->items[u->focus],x);}
 		if(u->gesture==G_NOTE){track(u,dx/screen_w);u->swipe.x=u->swipe.to=(float)u->x;u->swipe.v=0;}
 		if(u->gesture==G_SHADE && dy<-10){track(u,1+dy/screen_h);u->shade.x=u->shade.to=rubber((float)u->x);u->shade.v=0;}
 		if(u->gesture==G_MENU_OPEN && moved){track(u,-dy/screen_h);u->menu.x=u->menu.to=rubber((float)u->x);u->menu.v=0;}
@@ -522,7 +540,14 @@ void ui_draw_over(struct server *s){
 	struct ui *u=s->ui;
 	if(!u){return;}
 	begin(s);
-	if(u->menu.x>0){float y=(1-u->menu.x)*screen_h;draw_layer(u,L_MENU,0,y);draw_layer(u,L_APPS,0,y-u->apps_scroll.x);}
+	if(u->menu.x>0){
+		float y=(1-u->menu.x)*screen_h;
+		draw_layer(u,L_MENU,0,y);
+		/* gl y is up */
+		glEnable(GL_SCISSOR_TEST);glScissor(0,0,screen_w,(int)fmaxf(0,ceilf(screen_h-y)));
+		draw_layer(u,L_APPS,0,y-u->apps_scroll.x);
+		glDisable(GL_SCISSOR_TEST);
+	}
 	if(u->tasks.x>0){draw_tasks(s);}
 	if(u->toast.x>0){draw_layer(u,L_TOAST,0,-(1-u->toast.x)*(STATUS+12+TOAST_H));}
 	/* the notes go between the shade's background and its covers above and below the list */
@@ -560,7 +585,7 @@ static FT_Face font(struct ui *u,const char *env,const char *path){
 }
 
 static void load_apps(struct ui *u){
-	u->napps=apps_load(&u->apps);u->terminal=-1;
+	u->napps=apps_load(&u->apps,ICON);u->terminal=-1;
 	for(int i=0;i<u->napps;i++){
 		struct app *a=&u->apps[i];
 		if(a->terminal && u->terminal<0){u->terminal=i;}
@@ -611,7 +636,9 @@ void ui_init(struct server *s){
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
 	glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,ATLAS_W,ATLAS_H,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
+	config_get("wallpaper",u->wall_conf,sizeof(u->wall_conf));
 	wallpaper(u);
+	level_restore();
 	load_apps(u);
 	u->home=true;u->focus=-1;u->fly_i=-1;
 	s->ui=u;s->inset=STATUS;
@@ -622,6 +649,9 @@ void ui_init(struct server *s){
 	u->hold=wl_event_loop_add_timer(s->loop,hold_fire,s);
 	u->press=wl_event_loop_add_timer(s->loop,press_fire,s);
 	u->child=wl_event_loop_add_signal(s->loop,SIGCHLD,reap,s);
+	char dir[300];int fd=inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
+	if(fd>=0 && config_dir(dir,sizeof(dir)) && inotify_add_watch(fd,dir,IN_CLOSE_WRITE|IN_MOVED_TO)>=0){u->conf=wl_event_loop_add_fd(s->loop,fd,WL_EVENT_READABLE,conf_changed,s);}
+	if(fd>=0){close(fd);}
 	shade_init(s);
 	if(glGetError()!=GL_NO_ERROR){fprintf(stderr,"yamashell: ui setup GL error\n");}
 }
@@ -631,6 +661,7 @@ void ui_finish(struct server *s){
 	if(!u){return;}
 	wl_event_source_remove(u->clock);wl_event_source_remove(u->hold);wl_event_source_remove(u->press);
 	wl_event_source_remove(u->child);
+	if(u->conf){wl_event_source_remove(u->conf);}
 	status_finish(u);
 	shade_finish(u);
 	for(int i=0;i<L_COUNT;i++){if(u->layers[i].vbo){glDeleteBuffers(1,&u->layers[i].vbo);}free(u->layers[i].v);}

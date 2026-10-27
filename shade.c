@@ -73,6 +73,28 @@ static void note_row(struct ui *u,struct layer *l,float x,float y,float w,uint32
 	text(u,l,F_TEXT,x+58,y+53,buf,15,white(.65f*a),0);
 }
 
+/* icon, track and knob */
+static void slider(struct ui *u,struct layer *l,int k,float x,float y,float w){
+	int v=level_get(k);float a=v<0 ? .42f : 1,tx=x+44,tw=w-56,cy=y+20,f=v<0 ? 0 : tw*v/100.f;
+	icon(u,l,x+18,cy,k==LEVEL_BRIGHTNESS ? I_BRIGHTNESS : I_VOLUME,24,white(.85f*a));
+	rect(l,tx,cy-3,tw,6,3,rgb(0x484848,a),rgb(0x484848,a));
+	if(v<0){return;}
+	rect(l,tx,cy-3,f,6,3,rgb(0x3cb2ff,1),rgb(0x0b72c9,1));
+	rect(l,tx+f-10,cy-10,20,20,10,white(1),white(1));
+	/* the item reaches past the track ends so 0 and 100 are easy to hit */
+	item(u,L_SHADE,A_SLIDER,k,tx-12,y,tw+24,40);
+}
+
+void slider_set(struct server *s,const struct item *it,double x){
+	level_set(it->arg,(int)lround((x-it->x-12)*100/(it->w-24)));
+	s->ui->dirty=true;schedule_repaint(s,true);
+}
+
+void slider_step(struct server *s,const struct item *it,int step){
+	level_set(it->arg,level_get(it->arg)+step);
+	s->ui->dirty=true;schedule_repaint(s,true);
+}
+
 /* the sheet's gradient at y, so the covers over the scrolled list match the background */
 static struct col shade_col(float y){
 	float t=clampf((y+screen_h*.25f)/(screen_h*1.25f),0,1);
@@ -83,7 +105,9 @@ static struct col shade_col(float y){
 void shade_build(struct ui *u){
 	struct layer *bg=&u->layers[L_SHADE],*list=&u->layers[L_NOTES],*top=&u->layers[L_SHADE_TOP],*toast=&u->layers[L_TOAST];struct status st=u->st;
 	float y0=-screen_h*.25f;
-	u->list_top=STATUS+142;u->list_bottom=screen_h-BOTTOM;
+	/* side by side in landscape, one under the other in portrait*/
+	bool wide=screen_w>screen_h;float extra=wide ? 44 : 84;
+	u->list_top=STATUS+142+extra;u->list_bottom=screen_h-BOTTOM;
 	rect(bg,0,u->list_top,screen_w,u->list_bottom-u->list_top,0,shade_col(u->list_top),shade_col(u->list_bottom));
 	rect(top,0,y0,screen_w,u->list_top-y0,0,shade_col(y0),shade_col(u->list_top));
 	rect(top,0,u->list_bottom,screen_w,screen_h-u->list_bottom,0,shade_col(u->list_bottom),shade_col(screen_h));
@@ -96,7 +120,11 @@ void shade_build(struct ui *u){
 		text(u,top,F_TEXT,x+tw/2,y+82,t->name,14,white(.75f*a),1);
 		item(u,L_SHADE,A_TOGGLE,i,x-4,y-4,tw+8,96);
 	}
-	text(u,top,F_TEXT,16,STATUS+130,"Notifications",15,white(.65f),0);
+	for(int k=0;k<LEVEL_COUNT;k++){
+		float sw=wide ? (screen_w-24)/2.f : screen_w-24;
+		slider(u,top,k,12+(wide ? k*sw : 0),STATUS+108+(wide ? 0 : k*40),sw);
+	}
+	text(u,top,F_TEXT,16,STATUS+130+extra,"Notifications",15,white(.65f),0);
 	float ny=u->list_top;
 	struct{uint32_t icon;const char *title;char sub[96];bool show;}notes[3]={
 		{I_USB,"USB connected","Shell on ttyGS0",st.usb},
@@ -156,7 +184,7 @@ bool toast_shown(struct ui *u){return is_open(&u->toast) && toast_note(u);}
 void open_shade(struct server *s,bool on){
 	struct ui *u=s->ui;
 	spring_to(&u->shade,on ? 1 : 0);u->focus=-1;
-	if(on){spring_to(&u->toast,0);}
+	if(on){spring_to(&u->toast,0);u->dirty=true;}
 	schedule_repaint(s,true);
 }
 

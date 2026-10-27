@@ -37,8 +37,7 @@ while [ ! -S "$XDG_RUNTIME_DIR/bus" ] && [ "$n" -lt 50 ]; do
 	n=$((n + 1))
 	sleep 0.1
 done
-# one terminal at start; after that apps are started from the shell's menu
-/usr/bin/yamashell --socket "$WAYLAND_DISPLAY" --start-terminal &
+/usr/bin/yamashell --socket "$WAYLAND_DISPLAY" &
 compositor=$!
 n=0
 while [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do

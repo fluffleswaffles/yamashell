@@ -18,6 +18,7 @@ if [ "${2:-}" = host ]; then
 		CC=("${HOST_CC:-clang}" -DYAMASHELL_HOST -fsanitize=address,undefined -fno-omit-frame-pointer)
 	fi
 	read -ra FLAGS <<< "$(pkg-config --cflags --libs wayland-server xkbcommon egl glesv2 freetype2 libpng libjpeg libsystemd) -lm"
+	read -ra APP_FLAGS <<< "$(pkg-config --cflags --libs wayland-client wayland-egl egl glesv2 freetype2 libpng libjpeg) -lm"
 else
 	SYSROOT="$TOP/work/sysroot-alpine"
 	"$TOP/linux/initramfs/sysroot.sh" "$SYSROOT"
@@ -25,7 +26,14 @@ else
 		--sysroot="$SYSROOT" --ld-path=/usr/bin/arm-linux-gnu-ld -static-libgcc)
 	[ -z "${TEST_INPUT:-}" ] || CC+=(-DYAMASHELL_TEST)
 	FLAGS=(-I"$SYSROOT/usr/include/freetype2" -I"$SYSROOT/usr/include/elogind" -L"$OUT/../vc-khrn" -lvcgl -lwayland-server -lxkbcommon -lfreetype -lpng16 -ljpeg -lelogind -lm)
+	APP_FLAGS=(-I"$SYSROOT/usr/include/freetype2" -L"$OUT/../vc-khrn" -lvcgl -lwayland-client -lwayland-egl -lfreetype -lpng16 -ljpeg -lm)
 fi
 "${CC[@]}" -std=gnu11 -O2 -g -Wall -Wextra -Werror -I"$OUT" -I"$HERE" \
-	"$HERE/server.c" "$HERE/render.c" "$HERE/shell.c" "$HERE/input.c" "$HERE/data.c" "$HERE/console.c" "$HERE/ui.c" "$HERE/draw.c" "$HERE/status.c" "$HERE/shade.c" "$HERE/tasks.c" "$HERE/apps.c" "$HERE/notify.c" "$OUT/xdg-shell.c" "$OUT/xdg-decoration.c" "$OUT/e6-vc-image.c" \
+	"$HERE/server.c" "$HERE/render.c" "$HERE/shell.c" "$HERE/input.c" "$HERE/data.c" "$HERE/console.c" "$HERE/ui.c" "$HERE/draw.c" "$HERE/status.c" "$HERE/shade.c" "$HERE/tasks.c" "$HERE/apps.c" "$HERE/notify.c" "$HERE/power.c" "$HERE/level.c" "$HERE/motion.c" "$HERE/config.c" "$HERE/image.c" "$OUT/xdg-shell.c" "$OUT/xdg-decoration.c" "$OUT/e6-vc-image.c" \
 	-o "$OUT/yamashell" "${FLAGS[@]}"
+for app in "$HERE"/apps/*/; do
+	name=$(basename "$app")
+	[ "$name" != common ] || continue
+	"${CC[@]}" -std=gnu11 -O2 -g -Wall -Wextra -Werror -I"$OUT" -I"$HERE" -I"$HERE/apps/common" \
+		"$app"*.c "$HERE"/apps/common/*.c "$HERE/level.c" "$HERE/motion.c" "$HERE/config.c" "$HERE/image.c" "$HERE/apps.c" "$OUT/xdg-shell.c" -o "$OUT/yamashell-$name" "${APP_FLAGS[@]}"
+done

@@ -35,6 +35,7 @@ static int repaint(void *data){
 	struct server *s=data;
 	struct surface *v;
 	s->repaint_pending=false;
+	if(power_asleep(s)){return 0;}
 	s->repaint_started=milliseconds();
 	/* textures already hold the commits */
 	wl_list_for_each(v, &s->surfaces, link){if(surface_visible(v)){callbacks_finish(&v->callbacks, true);}}
@@ -52,6 +53,7 @@ static int repaint(void *data){
 
 void schedule_repaint(struct server *s, bool dirty){
 	s->dirty|=dirty;
+	if(power_asleep(s)){return;}
 	if(!s->repaint_pending){
 		uint32_t elapsed=milliseconds()-s->repaint_started;
 		uint32_t interval=s->repaint_interval ? s->repaint_interval : 16;
@@ -472,7 +474,7 @@ static int stop(int signal, void *data){(void)signal; wl_display_terminate(((str
 int main(int argc, char **argv){
 	struct server s={.keymap_fd=-1,.input_fd=-1,.console_fd=-1,.zoom=1};
 	const char *socket="wayland-0";
-	bool ui=false,start_terminal=false;
+	bool ui=false;
 	if(argc==2 && !strcmp(argv[1],"--restore-console")){console_restore();return 0;}
 	for(int i=1;i<argc;i++){
 #if defined(YAMASHELL_HOST) || defined(YAMASHELL_TEST)
@@ -480,10 +482,9 @@ int main(int argc, char **argv){
 #endif
 		if(!strcmp(argv[i],"--headless")){s.headless=true;}
 		else if(!strcmp(argv[i],"--ui")){ui=true;}
-		else if(!strcmp(argv[i],"--start-terminal")){start_terminal=true;}
 		else if(!strcmp(argv[i],"--capture") && i+1<argc){s.capture=argv[++i];}
 		else if(!strcmp(argv[i],"--socket") && i+1<argc){socket=argv[++i];}
-		else{fprintf(stderr,"usage: yamashell [--socket name] [--headless] [--ui] [--capture frame.ppm] [--start-terminal]\n"); return 1;}
+		else{fprintf(stderr,"usage: yamashell [--socket name] [--headless] [--ui] [--capture frame.ppm]\n"); return 1;}
 	}
 #if !defined(YAMASHELL_HOST) && !defined(YAMASHELL_TEST)
 	if(s.headless || s.capture){fprintf(stderr,"yamashell: headless capture is available in the host build\n"); return 1;}
@@ -512,16 +513,17 @@ int main(int argc, char **argv){
 	shell_init(&s); data_init(&s); input_init(&s);
 	/* the shell UI is on by default; headless window tests opt in with --ui */
 	if(!s.headless || ui){ui_init(&s);}
+	/* after ui_init put the saved brightness back */
+	power_init(&s);
 	if(wl_display_add_socket(s.display,socket)<0){fprintf(stderr,"yamashell: cannot create %s\n",socket); return 1;}
 	/* apps launched from the shell connect here */
 	setenv("WAYLAND_DISPLAY",socket,1);
-	if(start_terminal){ui_start_terminal(&s);}
 	struct wl_event_source *sigint=wl_event_loop_add_signal(s.loop,SIGINT,stop,&s);
 	struct wl_event_source *sigterm=wl_event_loop_add_signal(s.loop,SIGTERM,stop,&s);
 	console_init(&s);
 	fprintf(stderr,"yamashell: listening on %s\n",socket);
 	schedule_repaint(&s,true); wl_display_run(s.display);
-	wl_display_destroy_clients(s.display); input_finish(&s); data_finish(&s); ui_finish(&s);
+	power_finish(&s); wl_display_destroy_clients(s.display); input_finish(&s); data_finish(&s); ui_finish(&s);
 	wl_event_source_remove(sigint); wl_event_source_remove(sigterm); wl_event_source_remove(s.repaint);
 	if(s.stats){wl_event_source_remove(s.stats);unlink(s.stats_path);}
 	wl_display_destroy(s.display); renderer_finish(&s); console_finish(&s);

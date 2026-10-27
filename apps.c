@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* installed apps from .desktop files (XDG desktop entry spec, the parts that
- * matter here) with their own PNG or SVG icons scaled to ICON pixels */
+ * matter here) with their own PNG or SVG icons scaled to icon_size pixels */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,7 +8,7 @@
 #include <strings.h>
 #include <dirent.h>
 #include <png.h>
-#include "yamashell.h"
+#include "apps.h"
 /* THIS IS THIRD PARTY!!!!! */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-compare"
@@ -151,7 +151,7 @@ static bool parse(const char *path,struct app *a){
 
 static int by_name(const void *x,const void *y){return strcasecmp(((const struct app *)x)->name,((const struct app *)y)->name);}
 
-int apps_load(struct app **out){
+int apps_load(struct app **out,int icon_size){
 	char dirs[8][256],path[600],seen[256][128];
 	int ndirs=data_dirs(dirs,8),n=0,cap=0,nseen=0;
 	struct app *list=NULL;
@@ -179,7 +179,7 @@ int apps_load(struct app **out){
 		closedir(dir);
 	}
 	if(n){qsort(list,n,sizeof(*list),by_name);}
-	for(int i=0;i<n;i++){list[i].icon=find_icon(list[i].icon_name,dirs,ndirs,ICON);}
+	for(int i=0;i<n;i++){list[i].icon=find_icon(list[i].icon_name,dirs,ndirs,icon_size);}
 	*out=list;
 	return n;
 }

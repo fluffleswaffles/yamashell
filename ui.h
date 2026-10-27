@@ -7,6 +7,8 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "yamashell.h"
+#include "level.h"
+#include "motion.h"
 
 #define STATUS 30
 #define EDGE 24 /* back zone at the left/right edge */
@@ -27,8 +29,8 @@
 
 /* L_APPS and L_NOTES scroll; their items belong to the app menu and the shade */
 enum{L_HOME,L_MENU,L_APPS,L_SHADE,L_NOTES,L_SHADE_TOP,L_TOAST,L_STATUS,L_COUNT};
-enum{A_NONE,A_LAUNCH,A_MENU,A_TOGGLE,A_CLOSE,A_NOTE};
-enum{G_NONE,G_SHADE_OPEN,G_SHADE,G_MENU_OPEN,G_MENU,G_HOME,G_BACK_L,G_BACK_R,G_TAP,G_HELD,G_TASKS,G_TOAST,G_NOTE,G_MENU_SCROLL,G_SHADE_SCROLL};
+enum{A_NONE,A_LAUNCH,A_MENU,A_TOGGLE,A_CLOSE,A_NOTE,A_SLIDER};
+enum{G_NONE,G_SHADE_OPEN,G_SHADE,G_MENU_OPEN,G_MENU,G_HOME,G_BACK_L,G_BACK_R,G_TAP,G_HELD,G_TASKS,G_TOAST,G_NOTE,G_MENU_SCROLL,G_SHADE_SCROLL,G_SLIDER};
 enum{F_TEXT,F_LIGHT,F_ICON,F_COUNT};
 struct col{float r,g,b,a;};
 struct vtx{float x,y,u,v,r,g,b,a,hw,hh,rad,mode;};
@@ -36,10 +38,6 @@ struct layer{GLuint vbo;struct vtx *v;int n,cap,drawn;};
 struct item{int layer,act,arg;float x,y,w,h;};
 struct glyph{uint32_t cp;int face,size,x,y,w,h,left,top,adv;};
 struct toggle{const char *name;uint32_t icon;bool on,na;};
-/* critically-ish damped spring: a little overshoot when it lands */
-struct spring{float x,v,to;};
-/* a list offset in pixels, 0..max, thrown with v */
-struct scroll{float x,v,max;};
 struct status{int pct;bool charging,charger,usb,card;};
 struct nicon{char name[160];bool ok;uint32_t used;};
 struct ui{
@@ -66,7 +64,8 @@ struct ui{
 	int focus,gesture,last_minute,held_key,uevent_fd,udc_fd;
 	double x0,y0,x,y,vel;
 	uint32_t anim_time,move_time;
-	struct wl_event_source *clock,*hold,*press,*child,*poll,*uevent,*udc,*toast_hide;
+	struct wl_event_source *clock,*hold,*press,*child,*poll,*uevent,*udc,*toast_hide,*conf;
+	char wall_conf[300]; /* the config wallpaper line the texture was made from */
 };
 
 extern struct toggle toggles[];
@@ -79,17 +78,13 @@ extern struct toggle toggles[];
 #define I_BACK 0xe5c4
 #define I_HOME 0xe88a
 #define I_TASKS 0xe8eb
+#define I_BRIGHTNESS 0xe1ac
+#define I_VOLUME 0xe050
 #define MAX_TASKS 16
 
 static inline struct col rgb(uint32_t c,float a){return (struct col){(c>>16&255)/255.f*a,(c>>8&255)/255.f*a,(c&255)/255.f*a,a};}
 static inline struct col white(float a){return (struct col){a,a,a,a};}
-static inline float clampf(float v,float lo,float hi){return v<lo ? lo : v>hi ? hi : v;}
-static inline void spring_to(struct spring *s,float to){s->to=to;}
-static inline bool spring_moving(struct spring *s){return s->x!=s->to || s->v!=0;}
-static inline bool is_open(struct spring *s){return s->to>.5f;}
 static inline int owner(int l){return l==L_APPS ? L_MENU : l==L_NOTES ? L_SHADE : l;}
-static inline bool scroll_moving(struct scroll *s){return s->v!=0 || s->x<0 || s->x>s->max;}
-static inline float rubber(float x){return x>1 ? 1+(x-1)*.3f : x<0 ? 0 : x;}
 
 /* draw.c */
 uint32_t utf8(const char **p);
@@ -101,10 +96,6 @@ void fit_text(struct ui *u,int face,const char *s,int size,float max,char *out,s
 void icon(struct ui *u,struct layer *l,float cx,float cy,uint32_t cp,int size,struct col c);
 void item(struct ui *u,int layer,int act,int arg,float x,float y,float w,float h);
 void wallpaper(struct ui *u);
-bool spring_step(struct spring *s,float dt,float k);
-void fling(struct spring *s,float v);
-void scroll_step(struct scroll *s,float dt);
-float scroll_rubber(struct scroll *s,float raw);
 void draw_layer(struct ui *u,int l,float x,float y);
 void draw_dynamic(struct ui *u,struct layer *l);
 void begin(struct server *s);
@@ -118,6 +109,10 @@ void status_finish(struct ui *u);
 int note_slot(struct ui *u,const struct note *n);
 void note_icon(struct ui *u,struct layer *l,float cx,float cy,int slot,uint32_t ic,int size,float a);
 void shade_build(struct ui *u);
+/* a slider item
+* set from the finger at x, or moved by step percent from the keys */
+void slider_set(struct server *s,const struct item *it,double x);
+void slider_step(struct server *s,const struct item *it,int step);
 bool toast_shown(struct ui *u);
 void open_shade(struct server *s,bool on);
 void swipe_start(struct ui *u,uint32_t id);

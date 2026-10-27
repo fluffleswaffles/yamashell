@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* the ui's drawing parts: glyph atlas, text, rounded rects, the wallpaper texture, springs */
+/* the ui's drawing parts: glyph atlas, text, rounded rects, the wallpaper texture */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include <setjmp.h>
-#include <png.h>
-#include <jpeglib.h>
 #include "ui.h"
+#include "image.h"
+#include "config.h"
 
 /* glyph atlas */
 uint32_t utf8(const char **p){
@@ -108,66 +107,24 @@ void item(struct ui *u,int layer,int act,int arg,float x,float y,float w,float h
 	if(u->nitems<(int)(sizeof(u->items)/sizeof(*u->items))){u->items[u->nitems++]=(struct item){layer,act,arg,x,y,w,h};}
 }
 
-/* wallpaper: RGB565 texture (jpg/png file)*/
-struct jpeg_fail{struct jpeg_error_mgr mgr;jmp_buf jump;};
-static void jpeg_fail(j_common_ptr c){longjmp(((struct jpeg_fail *)c->err)->jump,1);}
-
-static unsigned char *load_jpeg(FILE *f,int *w,int *h){
-	struct jpeg_decompress_struct c;struct jpeg_fail e;unsigned char *volatile rgb=NULL;
-	c.err=jpeg_std_error(&e.mgr);e.mgr.error_exit=jpeg_fail;
-	if(setjmp(e.jump)){jpeg_destroy_decompress(&c);free(rgb);return NULL;}
-	jpeg_create_decompress(&c);jpeg_stdio_src(&c,f);jpeg_read_header(&c,TRUE);
-	/* DCT scaling decodes a big photo straight at about screen size */
-	c.scale_num=1;c.scale_denom=1;
-	while(c.scale_denom<8 && c.image_width/(c.scale_denom*2)>=(unsigned)screen_w && c.image_height/(c.scale_denom*2)>=(unsigned)screen_h){c.scale_denom*=2;}
-	c.out_color_space=JCS_RGB;
-	jpeg_start_decompress(&c);
-	*w=(int)c.output_width;*h=(int)c.output_height;
-	rgb=malloc((size_t)*w**h*3);
-	if(!rgb){jpeg_destroy_decompress(&c);return NULL;}
-	while(c.output_scanline<c.output_height){JSAMPROW row=rgb+(size_t)c.output_scanline**w*3;jpeg_read_scanlines(&c,&row,1);}
-	jpeg_finish_decompress(&c);jpeg_destroy_decompress(&c);
-	return rgb;
-}
-
-static unsigned char *load_png(FILE *f,int *w,int *h){
-	png_image img={.version=PNG_IMAGE_VERSION};
-	if(!png_image_begin_read_from_stdio(&img,f)){return NULL;}
-	img.format=PNG_FORMAT_RGB;
-	unsigned char *rgb=malloc(PNG_IMAGE_SIZE(img));
-	if(!rgb || !png_image_finish_read(&img,NULL,rgb,0,NULL)){free(rgb);png_image_free(&img);return NULL;}
-	*w=(int)img.width;*h=(int)img.height;
-	return rgb;
-}
-
+/* wallpaper: RGB565 texture */
 void wallpaper(struct ui *u){
-	const char *path=getenv("YAMASHELL_WALLPAPER");
-	if(!path){path=ASSETS "wallpaper.jpg";}
-	uint16_t *px=calloc((size_t)screen_w*screen_h,2);
-	if(!px){return;}
-	FILE *f=fopen(path,"rb");
-	unsigned char magic[4]={0},*rgb=NULL;int w=0,h=0;
-	if(f && fread(magic,1,4,f)==4){
-		rewind(f);
-		rgb=magic[0]==0xff && magic[1]==0xd8 ? load_jpeg(f,&w,&h) : magic[0]==0x89 && magic[1]=='P' ? load_png(f,&w,&h) : NULL;
+	char path[300];unsigned char *rgb=NULL;
+	if(!config_get("wallpaper",path,sizeof(path)) || !(rgb=image_load(path,screen_w,screen_h))){
+		snprintf(path,sizeof(path),"%s",wallpaper_default());
+		rgb=image_load(path,screen_w,screen_h);
 	}
-	if(f){fclose(f);}
+	uint16_t *px=calloc((size_t)screen_w*screen_h,2);
+	if(!px){free(rgb);return;}
 	if(rgb){
-		float s=fmaxf((float)screen_w/w,(float)screen_h/h),ox=(w*s-screen_w)/2,oy=(h*s-screen_h)/2;
-		for(int y=0;y<screen_h;y++){
-			int sy=(int)((y+oy)/s);if(sy>=h){sy=h-1;}
-			for(int x=0;x<screen_w;x++){
-				int sx=(int)((x+ox)/s);if(sx>=w){sx=w-1;}
-				const unsigned char *p=rgb+((size_t)sy*w+sx)*3;
-				px[y*screen_w+x]=(uint16_t)((p[0]>>3)<<11|(p[1]>>2)<<5|(p[2]>>3));
-			}
-		}
+		for(int i=0;i<screen_w*screen_h;i++){const unsigned char *p=rgb+(size_t)i*3;px[i]=(uint16_t)((p[0]>>3)<<11|(p[1]>>2)<<5|(p[2]>>3));}
 		free(rgb);
 	}
 	else{
 		fprintf(stderr,"yamashell: no wallpaper %s, plain background\n",path);
 		for(int i=0;i<screen_w*screen_h;i++){px[i]=0x18e5;}
 	}
+	if(u->wall){glDeleteTextures(1,&u->wall);}
 	glGenTextures(1,&u->wall);glBindTexture(GL_TEXTURE_2D,u->wall);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
@@ -175,39 +132,6 @@ void wallpaper(struct ui *u){
 	glTexImage2D(GL_TEXTURE_2D,0,GL_RGB,screen_w,screen_h,0,GL_RGB,GL_UNSIGNED_SHORT_5_6_5,px);
 	glPixelStorei(GL_UNPACK_ALIGNMENT,4);
 	free(px);
-}
-
-/* animation */
-bool spring_step(struct spring *s,float dt,float k){
-	if(s->x==s->to && s->v==0){return false;}
-	float c=2*.72f*sqrtf(k);
-	for(float t=0;t<dt;t+=.004f){
-		float h=fminf(.004f,dt-t);
-		s->v+=(-k*(s->x-s->to)-c*s->v)*h;s->x+=s->v*h;
-	}
-	if(fabsf(s->x-s->to)<.002f && fabsf(s->v)<.02f){s->x=s->to;s->v=0;}
-	return true;
-}
-
-
-/* a thrown list slows down by itself, past an end it springs back without bouncing */
-void scroll_step(struct scroll *s,float dt){
-	for(float t=0;t<dt;t+=.004f){
-		float h=fminf(.004f,dt-t),end=clampf(s->x,0,s->max);
-		if(s->x!=end){s->v+=(-400*(s->x-end)-40*s->v)*h;}
-		else{s->v*=expf(-3.f*h);}
-		s->x+=s->v*h;
-	}
-	float end=clampf(s->x,0,s->max);
-	if(fabsf(s->v)<10 && fabsf(s->x-end)<.5f){s->x=end;s->v=0;}
-}
-
-/* the finger pulls a third as far past an end */
-float scroll_rubber(struct scroll *s,float raw){return raw<0 ? raw*.35f : raw>s->max ? s->max+(raw-s->max)*.35f : raw;}
-
-void fling(struct spring *s,float v){
-	s->v=v;
-	s->to=s->x+v*.12f>.5f ? 1 : 0;
 }
 
 /* drawing */

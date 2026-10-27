@@ -14,6 +14,7 @@
 extern int screen_w, screen_h;
 struct server;
 struct ui;
+struct power;
 struct rect{int64_t x, y, w, h;};
 struct surface;
 struct damage_rect{struct wl_list link;struct rect rect;bool buffer;};
@@ -79,8 +80,16 @@ struct server{
 	float zoom, zoom_x, zoom_y; /* windows scaled by zoom around (zoom_x, zoom_y): open / home animation */
 	const char *stats_path;
 	struct ui *ui;
+	struct power *power;
 };
 uint32_t milliseconds(void);
+void power_init(struct server *s);
+void power_finish(struct server *s);
+void power_sleep(struct server *s);
+bool power_asleep(struct server *s);
+bool power_key(struct server *s, uint32_t key, uint32_t state);
+bool power_touch(struct server *s, int id, int state);
+bool power_pointer(struct server *s);
 void schedule_repaint(struct server *s, bool dirty);
 void surface_apply(struct surface *v);
 bool surface_synced(struct surface *v);
@@ -104,13 +113,8 @@ void input_pointer(struct server *s, uint32_t time, double x, double y);
 void input_button(struct server *s, uint32_t time, uint32_t button, uint32_t state);
 void input_touch(struct server *s, uint32_t time, int id, double x, double y, int state);
 void input_key_tap(struct server *s, uint32_t key);
-/* an installed app; icon = ICON x ICON premultiplied RGBA or NULL */
-#define ICON 64
-struct app{char *name, *exec, *icon_name;unsigned char *icon;bool terminal;pid_t pid;};
-int apps_load(struct app **list);
-void apps_free(struct app *list, int n);
-/* an icon by name (icon theme, pixmaps) or path, size x size premultiplied RGBA or NULL */
-unsigned char *icon_load(const char *name, int size);
+#define ICON 64 /* app icons in the menu */
+#include "apps.h"
 /* a notification from the session bus, expire = milliseconds() when it closes itself, 0 = stays */
 #define MAX_NOTES 32
 /* icon = icon name or path from the sender (image-path hint, app_icon, desktop-entry), may be empty */
@@ -129,7 +133,6 @@ bool ui_draw_under(struct server *s);
 void ui_draw_over(struct server *s);
 bool ui_animating(struct server *s);
 void ui_window_mapped(struct server *s, struct surface *v);
-void ui_start_terminal(struct server *s);
 bool renderer_init(struct server *s);
 bool renderer_upload(struct surface *v, struct wl_shm_buffer *buffer, struct rect r, bool fresh, bool opaque);
 /* the texture is bound when the buffer is made */

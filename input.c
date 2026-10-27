@@ -57,6 +57,7 @@ void input_focus(struct server *s,struct surface *v){
 
 void input_key(struct server *s,uint32_t time,uint32_t key,uint32_t state){
 	if(key>KEY_MAX || state>1){return;}
+	if(power_key(s,key,state)){return;}
 	uint32_t n=0;
 	while(n<s->npressed && s->pressed[n]!=key){n++;}
 	if(state && n==s->npressed && n<256){s->pressed[s->npressed++]=key;}
@@ -97,6 +98,7 @@ static struct surface *hit(struct server *s,double x,double y){
 }
 
 void input_pointer(struct server *s,uint32_t time,double x,double y){
+	if(power_pointer(s)){return;}
 	if(x<0){x=0;}if(y<0){y=0;}if(x>=screen_w){x=screen_w-1;}if(y>=screen_h){y=screen_h-1;}
 	s->pointer_x=x;s->pointer_y=y;
 	if(s->cursor){s->cursor->x=(int)x-s->hotspot_x;s->cursor->y=(int)y-s->hotspot_y;schedule_repaint(s,true);}
@@ -119,6 +121,7 @@ void input_pointer(struct server *s,uint32_t time,double x,double y){
 }
 
 void input_button(struct server *s,uint32_t time,uint32_t button,uint32_t state){
+	if(power_key(s,button,state)){return;}
 	struct surface *v=s->pointer_focus;
 	if(state && v){struct surface *root=v;while(root->parent){root=root->parent;}surface_focus(root);}
 
@@ -130,6 +133,7 @@ void input_button(struct server *s,uint32_t time,uint32_t button,uint32_t state)
 	}}
 }
 void input_touch(struct server *s,uint32_t time,int id,double x,double y,int state){
+	if(power_touch(s,id,state)){return;}
 	if(ui_touch(s,id,x,y,state)){return;}
 	if(state==1 && s->ntouches==0){
 		struct surface *v=hit(s,x,y);if(!v){return;}

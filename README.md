@@ -12,6 +12,10 @@ Status: early. Works on the phone with alacritty (drawn on the VC through libvcg
 - the app menu and the shade's notes scroll: drag, throw, springy ends; at the top of the menu a pull down closes it, at the end of the notes a push up closes the shade; the D-pad scrolls the focus into view
 - the shade follows battery, charger, usb shell and memory card changes (kernel uevents, plus a 10 s check)
 - notifications: yamashell is the session bus `org.freedesktop.Notifications` server, so `notify-send` and libnotify apps show up; a new one pops up as a toast (tap = shade, push up = hide, critical ones stay), in the shade it is swiped away sideways (or OK on it with the keys). The icon comes from the `image-path` hint, `app_icon` (name or path) or the sending app's .desktop entry; the status bar shows one small icon per app with notes waiting. session.sh starts the `dbus-daemon`
+- the shade has brightness and volume sliders (drag, or left / right on the focused one). Brightness goes to the first `/sys/class/backlight` device (`rapuyama-vc` on the E6, never below 5%), volume is only remembered until the phone has an audio driver
+- system apps live in `apps/`, each `apps/<name>/` builds into `yamashell-<name>`. They share `apps/common`: a window drawn with GLES on the VC through `libvcgl` (wayland-egl, only quads cross the bus) in the shell's look (its fonts, icons, colours and the same springs, `motion.c`), 1.25x bigger than the pixels, a glyph atlas and a frame loop that only runs while something moves
+- settings survive a reboot in `$XDG_CONFIG_HOME/yamashell/settings.conf` (`~/.config/...`), `key=value` lines written by `config.c`: `wallpaper`, `brightness` (put back on the panel when the shell starts), `volume`. The shell watches the file and loads a new wallpaper at once
+- `yamashell-settings` (`apps/settings`): sections Connections, Sounds and vibration, Notifications, Display, Wallpapers, Lock screen, Security, Apps, About phone. A page slides in over the list, the list throws and springs back at its ends, Display and Sounds carry the same sliders as the shade, Wallpapers picks the home screen picture from `wallpaper.jpg` and `wallpapers/` next to it. Apps lists the menu's apps; an app's page shows its size (its apk package's installed size, or the program file without an apk database) and opens it, uninstall is a placeholder. About phone shows the model with a picture of the phone (`yamashell-device-{e6,n8,e7}.svg` in `assets/icons`, picked by the devicetree's `compatible`), the rapuyama-linux version from `/etc/rapuyama-release`, processor, graphics, memory, zram, mounted storage, battery, kernel and userspace. The other sections are placeholders for now.
 - sheets move on a spring: they follow the finger, a fling decides open or closed, and they land with a small bounce
 - touch: left/right edge = back (pull until the arrow pops, Esc to the app), bottom handle = home, pulled further past a dead zone = running apps (on home too), dragging the home bar = app menu, status bar = shade, long press on a running app's icon = close it
 - running apps: a card per window with its live picture; tap opens, swipe sideways browses, swipe a card up closes the app
@@ -26,17 +30,9 @@ Not done: Wayland EGL clients, dmabuf, multiple outputs.
 ./build.sh <out dir> # phone, needs the e6-linux tree around it
 ```
 
-Host needs `wayland-scanner` and the dev packages for wayland-server, xkbcommon, egl, glesv2, freetype2, libpng, libjpeg, libsystemd (sd-bus). `SANITIZE=1` builds the host binary with ASan/UBSan. Tests: `tests/scroll.py`, `dbus-run-session -- tests/notify.py`.
+Both write `yamashell` and `yamashell-settings` into the out dir. Host needs `wayland-scanner` and the dev packages for wayland-server, wayland-client, xkbcommon, egl, glesv2, freetype2, libpng, libjpeg, libsystemd (sd-bus). `SANITIZE=1` builds the host binary with ASan/UBSan.
 
-The phone build expects to sit at `linux/yamashell` in e6-linux: it uses e6-linux's alpine sysroot (`linux/initramfs/sysroot.sh`) and links `libvcgl` from the `vc-khrn` build next to the out dir. Normally `linux/kernel/build-vc.sh` builds it and puts it into the initramfs together with `session.sh` and `assets/`.
-
-## Try it on a PC
-
-```sh
-./preview.py # or ./preview.py --size 360x640
-```
-
-Builds the host binary into `~/.cache/yamashell-preview` and shows yamashell in a window: the mouse is the touchscreen, the keyboard is the keyboard, F1 / F2 / F3 are the E6 Home / Messages / End keys (hold for the long press: running apps / shade / close). The app menu lists the PC's own apps; any Wayland app that can draw with `wl_shm` opens inside with `WAYLAND_DISPLAY=wayland-yamashell-preview <app>` (GTK 4 apps with `GSK_RENDERER=cairo`, there is no dmabuf). Notifications go to a private session bus that preview.py starts (the desktop's own bus already has a notification daemon), it prints the `DBUS_SESSION_BUS_ADDRESS=... notify-send <title> [text]` line to use; apps started from the shell's menu get that bus too. Needs Python's tkinter (`python3-tkinter` on Fedora).
+The phone build expects to sit at `linux/yamashell` in e6-linux: it uses e6-linux's alpine sysroot (`linux/initramfs/sysroot.sh`) and links `libvcgl` from the `vc-khrn` build next to the out dir. Normally `linux/kernel/build-vc.sh` builds it and puts it into the initramfs together with `session.sh` and `assets/`; `yamashell-settings` goes next to `yamashell` in `/usr/bin` (its menu entry is `assets/applications/yamashell-settings.desktop`, the icon `assets/icons/hicolor/scalable/apps/yamashell-settings.svg`). The apps link libvcgl, libpng and libjpeg too (wallpaper thumbnails), and `assets/wallpapers/` has to be installed next to `wallpaper.jpg`.
 
 ## Run
 
@@ -51,7 +47,6 @@ yamashell --socket wayland-vc --ui
 | `--headless` | no output, for tests |
 | `--capture <file>` | write frames to a file (tests) |
 | `--input-fd <fd>` | read input events from an fd instead of evdev (tests) |
-| `--start-terminal` | start the terminal app once the socket is up |
 | `--restore-console` | give tty1 back and exit |
 
 | Variable | Meaning |
@@ -62,7 +57,7 @@ yamashell --socket wayland-vc --ui
 | `XDG_DATA_DIRS` | where `applications/*.desktop`, `icons/hicolor/*/apps/*.png` and `icons/hicolor/scalable/apps/*.svg` are looked up, after `/usr/share/yamashell/` |
 | `YAMASHELL_WALLPAPER`, `YAMASHELL_FONT`, `YAMASHELL_FONT_LIGHT`, `YAMASHELL_ICONS` | replace the default assets, see [assets/README.md](assets/README.md) |
 
-`session.sh` (installed as `yamashell-session`) waits for `/dev/vc-khrn`, starts the compositor on `wayland-vc` with one terminal (the app marked `TerminalEmulator`, alacritty). Other clients connect with:
+`session.sh` (installed as `yamashell-session`) waits for `/dev/vc-khrn`, starts the compositor on `wayland-vc`. Other clients connect with:
 
 ```sh
 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-vc alacritty
