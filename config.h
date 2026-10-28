@@ -10,4 +10,8 @@ bool config_dir(char *path,size_t n);
 /* false when the key isn't set */
 bool config_get(const char *key,char *val,size_t n);
 void config_set(const char *key,const char *val);
+/* "e6", "n8" or "e7" from the devicetree */
+const char *config_device(void);
+/* aod key */
+bool config_aod(void);
 #endif

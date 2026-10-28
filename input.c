@@ -153,7 +153,7 @@ void input_key(struct server *s,uint32_t time,uint32_t key,uint32_t state){
 		int *st=key==KEY_RIGHTALT ? &s->sticky_fn : &s->sticky_shift;
 		*st=(*st+1)%3;s->mod_tap=0;tapped=true;
 	}
-	if(key==KEY_COMPOSE && (state || s->sym_grabbed)){sym_key(s,state);return;}
+	if(key==KEY_COMPOSE && ((state && !ui_locked(s)) || s->sym_grabbed)){sym_key(s,state);return;}
 	if(ui_key(s,key,state)){if(tapped){sticky_apply(s);}return;}
 	if(key==KEY_TAB && !state && s->tab_grabbed){s->tab_grabbed=false;return;}
 	if(state && key==KEY_TAB && xkb_state_mod_name_is_active(s->keys,XKB_MOD_NAME_ALT,XKB_STATE_MODS_EFFECTIVE)){

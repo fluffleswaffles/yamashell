@@ -142,6 +142,12 @@ bool ui_draw_under(struct server *s);
 void ui_draw_over(struct server *s);
 bool ui_animating(struct server *s);
 void ui_window_mapped(struct server *s, struct surface *v);
+/* llock screen */
+void ui_lock(struct server *s);
+void ui_unlock(struct server *s);
+bool ui_locked(struct server *s);
+/* lock screen dark */
+void ui_aod(struct server *s, bool on);
 
 
 void ui_language(struct server *s);

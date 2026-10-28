@@ -57,3 +57,20 @@ void config_set(const char *key,const char *val){
 	if(in){fclose(in);}
 	if(fclose(out) || rename(tmp,path)){unlink(tmp);}
 }
+
+const char *config_device(void){
+	char c[256]={0};size_t len=0;
+	FILE *f=fopen("/sys/firmware/devicetree/base/compatible","r");
+	if(f){len=fread(c,1,sizeof(c)-1,f);fclose(f);}
+	for(char *p=c;p<c+len;p+=strlen(p)+1){
+		if(!strcmp(p,"nokia,n8")){return "n8";}
+		if(!strcmp(p,"nokia,e7")){return "e7";}
+	}
+	return "e6";
+}
+
+bool config_aod(void){
+	char v[8];
+	if(config_get("aod",v,sizeof(v))){return atoi(v)!=0;}
+	return strcmp(config_device(),"e6")!=0;
+}

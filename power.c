@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* screen-off idle keeps input, USB and the watchdogs alive */
+/* screen-off idle keeps input, USB and the watchdogs alive.
+ * with aod on, off is the lock screen kept dark on the lowest light instead, redrawn once a minute */
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -18,7 +19,7 @@ struct power{
 	unsigned char swallowed[KEY_MAX+1];
 	unsigned touch_mask;
 	int brightness, key_brightness, screen_value, key_value;
-	bool asleep, dimmed;
+	bool asleep, dimmed, aod_on, aod;
 };
 
 static int read_value(const char *path){
@@ -61,7 +62,7 @@ static uint32_t setting_ms(const char *env,const char *key,unsigned def){
 
 static void arm(struct power *p){
 	uint32_t now=milliseconds(), delay=0, elapsed=now-p->activity;
-	if(!p->asleep){
+	if(!p->asleep && !p->aod){
 		if(!p->dimmed && p->dim_ms && elapsed<p->dim_ms){delay=p->dim_ms-elapsed;}
 		if(p->off_ms){
 			uint32_t next=elapsed<p->off_ms ? p->off_ms-elapsed : 1000;
@@ -80,7 +81,7 @@ bool power_asleep(struct server *s){return s->power && s->power->asleep;}
 
 /* the shade and settings sliders write the backlight too, pick their value up before dimming */
 static void sync_brightness(struct power *p){
-	if(p->asleep || p->dimmed){return;}
+	if(p->asleep || p->dimmed || p->aod){return;}
 	int v=read_value(p->screen);
 	if(v>0){p->brightness=p->screen_value=v;}
 }
@@ -91,14 +92,28 @@ static void wake(struct power *p){
 	p->dimmed=false;
 	write_value(p->screen, p->brightness, &p->screen_value);
 	p->asleep=false;
+	if(p->aod){p->aod=false;ui_aod(p->server,false);}
 	if(was_asleep){fprintf(stderr, "yamashell: screen awake\n");schedule_repaint(p->server, true);}
 	arm(p);
 }
 
+static int dim_value(struct power *p){return p->brightness/8>1 ? p->brightness/8 : 1;}
+
 void power_sleep(struct server *s){
 	struct power *p=s->power;
-	if(!p || p->asleep){return;}
+	if(!p || p->asleep || p->aod){return;}
 	sync_brightness(p);
+
+	ui_lock(s);ui_aod(s,p->aod_on);
+	if(s->ui){renderer_frame(s);}
+	if(p->aod_on && write_value(p->screen, dim_value(p), &p->screen_value)){
+		write_value(p->keyboard, 0, &p->key_value);
+		p->aod=true;p->dimmed=false;
+		fprintf(stderr, "yamashell: always on display\n");
+		arm(p);
+		return;
+	}
+	if(p->aod_on){ui_aod(s,false);}
 	/* keep drawing if the hardware could not actually turn the light off */
 	if(!write_value(p->screen, 0, &p->screen_value)){return;}
 	write_value(p->keyboard, 0, &p->key_value);
@@ -114,12 +129,8 @@ static int tick(void *data){
 	uint32_t now=milliseconds(), elapsed=now-p->activity;
 	if(s->npressed || s->ntouches || p->touch_mask){p->activity=now;elapsed=0;}
 	sync_brightness(p);
-	if(!p->asleep && p->off_ms && elapsed>=p->off_ms){power_sleep(s);}
-	else if(!p->asleep && !p->dimmed && p->dim_ms && elapsed>=p->dim_ms){
-		int dim=p->brightness/8;
-		if(dim<1){dim=1;}
-		p->dimmed=write_value(p->screen, dim, &p->screen_value);
-	}
+	if(!p->asleep && !p->aod && p->off_ms && elapsed>=p->off_ms){power_sleep(s);}
+	else if(!p->asleep && !p->aod && !p->dimmed && p->dim_ms && elapsed>=p->dim_ms){p->dimmed=write_value(p->screen, dim_value(p), &p->screen_value);}
 	if(p->key_ms && now-p->key_activity>=p->key_ms){write_value(p->keyboard, 0, &p->key_value);}
 	arm(p);
 	return 0;
@@ -129,15 +140,17 @@ bool power_key(struct server *s, uint32_t key, uint32_t state){
 	struct power *p=s->power;
 	if(!p || key>KEY_MAX){return false;}
 	if(!state && p->swallowed[key]){p->swallowed[key]=0;return true;}
+
+	if(key==KEY_SCREENLOCK && state && ui_locked(s)){p->swallowed[key]=1;wake(p);ui_unlock(s);return true;}
 	if(key==KEY_POWER || key==KEY_SLEEP || key==KEY_SCREENLOCK){
 		if(state){
 			p->swallowed[key]=1;
-			if(p->asleep){wake(p);}else{power_sleep(s);}
+			if(p->asleep || p->aod){wake(p);}else{power_sleep(s);}
 		}
 		return true;
 	}
 	if(state){
-		bool consume=p->asleep;
+		bool consume=p->asleep || p->aod;
 		wake(p);
 		p->key_activity=milliseconds();
 		write_value(p->keyboard, p->key_brightness, &p->key_value);
@@ -151,7 +164,7 @@ bool power_touch(struct server *s, int id, int state){
 	struct power *p=s->power;
 	if(!p || id<0 || id>=16){return false;}
 	unsigned bit=1u<<id;
-	if(state==1 && (p->asleep || p->touch_mask)){p->touch_mask|=bit;}
+	if(state==1 && (p->asleep || p->aod || p->touch_mask)){p->touch_mask|=bit;}
 	bool consume=p->touch_mask&bit;
 	if(state){wake(p);}
 	if(!state){p->touch_mask&=~bit;}
@@ -160,7 +173,7 @@ bool power_touch(struct server *s, int id, int state){
 
 bool power_pointer(struct server *s){
 	if(!s->power){return false;}
-	bool consume=s->power->asleep;
+	bool consume=s->power->asleep || s->power->aod;
 	wake(s->power);
 	return consume;
 }
@@ -197,6 +210,7 @@ void power_settings(struct server *s){
 	if(!p){return;}
 	p->dim_ms=setting_ms("YAMASHELL_DIM_SECONDS","dim_seconds",30);
 	p->off_ms=setting_ms("YAMASHELL_SLEEP_SECONDS","sleep_seconds",60);
+	p->aod_on=config_aod();
 	arm(p);
 }
 

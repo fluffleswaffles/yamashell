@@ -33,7 +33,7 @@
 #define DEVICE 150
 #define INFOS 24
 
-enum{K_NONE,K_WALLS,K_APPS,K_ABOUT,K_KEYBOARD,K_DISPLAY};
+enum{K_NONE,K_WALLS,K_APPS,K_ABOUT,K_KEYBOARD,K_DISPLAY,K_LOCK};
 struct section{const char *title,*sub;uint32_t icon;int level,kind;struct{const char *title;uint32_t icon;}rows[4];};
 static const struct section sections[]={
 	{"Connections","Wi-Fi, Bluetooth, SIM",0xe63e,-1,K_NONE,{{"Wi-Fi",0xe63e},{"Bluetooth",0xe1a7},{"SIM",0xe32b}}},
@@ -42,7 +42,7 @@ static const struct section sections[]={
 	{"Display","Brightness, screen timeout",0xe1ac,LEVEL_BRIGHTNESS,K_DISPLAY,{{0}}},
 	{"Wallpapers","Home screen picture",0xe1bc,-1,K_WALLS,{{0}}},
 	{"Keyboard","Layout, language, one-touch keys",0xe312,-1,K_KEYBOARD,{{0}}},
-	{"Lock screen","Screen lock",0xe897,-1,K_NONE,{{0}}},
+	{"Lock screen","Always-on display",0xe897,-1,K_LOCK,{{0}}},
 	{"Security","Passwords, encryption",0xe32a,-1,K_NONE,{{0}}},
 	{"Apps","Installed apps",0xe5c3,-1,K_APPS,{{0}}},
 	{"About phone","Model, Linux version",0xe88e,-1,K_ABOUT,{{0}}},
@@ -56,10 +56,10 @@ static const struct{const char *conf,*title;}switches[]={{"sym","Sym"},{"shift_s
 #define NKBDS (int)(sizeof(kbds)/sizeof(*kbds))
 #define NSWITCHES (int)(sizeof(switches)/sizeof(*switches))
 static int kbd_pick,switch_pick,is_e6=-1;
-static bool sticky=true;
+static bool sticky=true,aod;
 
 static bool section_shown(int i){
-	if(is_e6<0){is_e6=!strcmp(sysinfo_device(),"e6");}
+	if(is_e6<0){is_e6=!strcmp(config_device(),"e6");}
 	return sections[i].kind!=K_KEYBOARD || is_e6;
 }
 
@@ -288,6 +288,24 @@ static void draw_keyboard(float ox,float y,bool front){
 	pagel.max=fmaxf(0,y+30+pagel.x+12-app_h);
 }
 
+#define C_AOD 13
+static void draw_lock(float ox,float y,bool front){
+	separator(ox+16,y-1,ox+app_w);
+	choice(ox,y,ROW,C_AOD,"Always-on display","The clock on a dark screen when it is off",aod,1,front);
+	y+=ROW;
+	if(is_e6){text(F_TEXT,ox+20,y+22,"The E6's LCD keeps its backlight on for it",15,C_WHITE,.65f,0);y+=30;}
+	pagel.max=fmaxf(0,y+pagel.x+12-app_h);
+}
+
+static void aod_answer(int b){if(b==1){aod=true;config_set("aod","1");}}
+
+static void aod_toggle(void){
+	static const char *const buttons[]={"Cancel","Turn on"};
+	if(aod){aod=false;config_set("aod","0");}
+	else if(is_e6){modal("Always-on display","The E6 has an LCD: its backlight stays on to show the clock, so the battery runs down much faster while the screen is off.",buttons,2,aod_answer);}
+	else{aod_answer(1);}
+}
+
 static void draw_display(float ox,float y,bool front){
 	separator(ox+16,y-1,ox+app_w);
 	picker_row(ox,y,P_DIM,front);separator(ox+20,y+ROW-1,ox+app_w);y+=ROW;
@@ -381,6 +399,7 @@ static void draw_page(float ox,bool front){
 	if(s->kind==K_APPS){draw_apps(ox,y,front);return;}
 	if(s->kind==K_ABOUT){draw_about(ox,y);return;}
 	if(s->kind==K_KEYBOARD){draw_keyboard(ox,y,front);return;}
+	if(s->kind==K_LOCK){draw_lock(ox,y+20,front);return;}
 	if(s->level>=0){
 		slider(ox,y,s->level,s->icon,front);
 		y+=SLIDER_H;
@@ -496,9 +515,10 @@ static void open_page(int i){
 	if(sections[i].kind==K_ABOUT){
 		ninfos=sysinfo_read(infos,INFOS);
 		sysinfo_model(model,sizeof(model));sysinfo_release(release,sizeof(release));
-		if(!device){char name[64];snprintf(name,sizeof(name),"yamashell-device-%s",sysinfo_device());device=icon_load(name,PX(DEVICE));}
+		if(!device){char name[64];snprintf(name,sizeof(name),"yamashell-device-%s",config_device());device=icon_load(name,PX(DEVICE));}
 	}
 
+	if(sections[i].kind==K_LOCK){aod=config_aod();}
 	if(sections[i].level>=0){int k=sections[i].level,v=levels[k]=level_get(k);shown[k]=(struct spring){v,0,v};}
 	if(sections[i].kind==K_KEYBOARD){
 		char v[16]="";
@@ -550,6 +570,7 @@ static void activate(struct hit *h){
 	else if(h->act==H_KEY){picking=h->arg;spring_to(&sub,1);focus=-1;subl=(struct scroll){0};}
 	else if(h->act==H_CHOICE && picking>=P_DIM){char v[16];snprintf(v,sizeof(v),"%d",pickers[picking].times[h->arg]);config_set(pickers[picking].conf,v);back();}
 	else if(h->act==H_PICK || (h->act==H_CHOICE && picking>=0)){config_set(pickers[picking].conf,h->arg ? apps[h->arg-1].exec : "");back();}
+	else if(h->act==H_CHOICE && h->arg==C_AOD){aod_toggle();}
 	else if(h->act==H_CHOICE && h->arg==12){sticky=!sticky;config_set("sticky_keys",sticky ? "on" : "off");}
 	else if(h->act==H_CHOICE && h->arg<8){kbd_pick=h->arg;config_set("keyboard",kbds[kbd_pick].conf);}
 	else if(h->act==H_CHOICE){switch_pick=h->arg-8;config_set("layout_switch",switches[switch_pick].conf);}

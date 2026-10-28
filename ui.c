@@ -80,6 +80,7 @@ static void build(struct ui *u){
 	if(!u->napps){text(u,menu,F_TEXT,screen_w/2.f,screen_h/2.f,"No apps installed",18,white(.7f),1);}
 
 	shade_build(u);
+	if(u->locked){lock_build(u,hm,buf,tm.tm_min);}
 
 	for(int i=0;i<L_COUNT;i++){
 		struct layer *l=&u->layers[i];
@@ -178,6 +179,7 @@ static int clock_tick(void *data){
 }
 
 static int active_layer(struct ui *u){
+	if(u->locked){return -1;}
 	if(is_open(&u->shade)){return L_SHADE;}
 	if(is_open(&u->menu)){return L_MENU;}
 	return u->home ? L_HOME : -1;
@@ -302,6 +304,13 @@ bool ui_key(struct server *s,uint32_t key,uint32_t state){
 		if(state){level_set(LEVEL_VOLUME,level_get(LEVEL_VOLUME)+(key==KEY_VOLUMEUP ? 10 : -10));osd_show(s);u->dirty=true;}
 		return true;
 	}
+
+	if(key==KEY_SCREENLOCK || key==KEY_POWER){
+		if(state){if(u->locked && key==KEY_SCREENLOCK){ui_unlock(s);}else{ui_lock(s);}}
+		return true;
+	}
+
+	if(u->locked){if(state){u->lock.v=-2.5f;schedule_repaint(s,true);}return true;}
 	if(symbols_key(s,key,state)){return true;}
 	int app=key==KEY_ADDRESSBOOK ? one_touch(u,"key_contacts") : -1;
 	if(app>=0){if(state){launch(s,app);}return true;}
@@ -374,8 +383,22 @@ static void track(struct ui *u,double pos){
 
 bool ui_touch(struct server *s,int id,double x,double y,int state){
 	struct ui *u=s->ui;
-	if(!u || (id!=0 && u->gesture==G_NONE)){return false;}
+	if(!u || (id!=0 && u->gesture==G_NONE && !u->locked)){return false;}
 	if(id!=0){return true;}
+
+	if(state==1 && u->locked){u->gesture=G_LOCK;u->x0=x;u->y0=y;u->vel=0;u->move_time=milliseconds();u->x=1;return true;}
+	if(u->gesture==G_LOCK){
+		double dy=y-u->y0;
+		if(state==2){track(u,1+dy/screen_h);u->lock.x=u->lock.to=rubber((float)u->x);u->lock.v=0;}
+		else{
+			u->gesture=G_NONE;
+			if(fabs(dy)<10 && fabs(x-u->x0)<10){u->lock.v=-2.5f;}
+			else{fling(&u->lock,(float)u->vel);if(!is_open(&u->lock)){ui_unlock(s);}}
+		}
+		schedule_repaint(s,true);
+		return true;
+	}
+	if(u->locked){return true;}
 	if(state==1){
 		if(symbols_touch(s,x,y)){u->gesture=G_HELD;return true;}
 		u->x0=x;u->y0=y;u->y=y;u->keys=false;u->vel=0;u->move_time=milliseconds();u->armed=false;
@@ -513,7 +536,7 @@ bool ui_animating(struct server *s){
 	if(!u){return false;}
 	bool sheet=u->gesture!=G_SHADE_OPEN && u->gesture!=G_SHADE && u->gesture!=G_MENU_OPEN && u->gesture!=G_MENU;
 	/* new glyphs drawn this frame reach the atlas on the next one */
-	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0 || spring_moving(&u->lift) || spring_moving(&u->gap) || spring_moving(&u->dim) || spring_moving(&u->osd) || spring_moving(&u->sym);
+	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0 || spring_moving(&u->lift) || spring_moving(&u->gap) || spring_moving(&u->dim) || spring_moving(&u->osd) || spring_moving(&u->sym) || (u->gesture!=G_LOCK && spring_moving(&u->lock)) || (u->lock.x>0 && spring_moving(&u->charge));
 }
 /* before the windows: wallpaper and home; returns whether app windows are drawn */
 bool ui_draw_under(struct server *s){
@@ -535,12 +558,14 @@ bool ui_draw_under(struct server *s){
 	if(u->gesture!=G_MENU_SCROLL){scroll_step(&u->apps_scroll,dt);}
 	if(u->gesture!=G_SHADE_SCROLL){scroll_step(&u->notes_scroll,dt);}
 	shade_step(u,dt);
+	lock_step(u,dt);
 	tasks_step(s,dt);
 	if(!u->home && !top_window(s)){u->home=true;spring_to(&u->app,0);u->app.x=0;u->app.v=0;input_focus(s,NULL);}
 	bool lang=!u->home && u->lang[0];
 	if(lang!=u->lang_shown){u->lang_shown=lang;u->dirty=true;}
 	if(u->dirty){build(u);}
 	s->zoom=u->app.x>0 ? u->app.x : 0;s->zoom_x=u->zoom_x;s->zoom_y=u->zoom_y;
+	if(u->lock.x>=1 && u->gesture!=G_LOCK){return false;}
 	/* a settled app covers the screen: no wallpaper or home behind it */
 	if(!u->home && !spring_moving(&u->app)){s->zoom=1;return true;}
 	glBindTexture(GL_TEXTURE_2D,u->wall);
@@ -589,8 +614,9 @@ void ui_draw_over(struct server *s){
 		float y=-(1-u->shade.x)*screen_h;
 		draw_layer(u,L_SHADE,0,y);draw_layer(u,L_NOTES,0,y-u->notes_scroll.x);draw_layer(u,L_SHADE_TOP,0,y);
 	}
-	draw_layer(u,L_STATUS,0,0);
 	struct layer *dyn=&u->dynamic;dyn->n=0;
+	lock_draw(s,dyn);
+	if(!u->aod){draw_layer(u,L_STATUS,0,0);}
 	int l=active_layer(u);
 	if(u->keys && !is_open(&u->tasks) && u->focus>=0 && owner(u->items[u->focus].layer)==l){
 		struct item *it=&u->items[u->focus];float ox,oy;layer_offset(u,it->layer,&ox,&oy);

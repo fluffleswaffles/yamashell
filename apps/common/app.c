@@ -313,13 +313,16 @@ static bool gl_init(void){
 static bool frame(void){
 	uint32_t now=app_ms();
 	float dt=a.last ? fminf((now-a.last)/1000.f,.1f) : 1/60.f;
-	a.moving=app_step(dt);a.last=a.moving ? now : 0;a.redraw=false;
+	a.moving=app_step(dt);
+	a.moving|=modal_step(dt);
+	a.last=a.moving ? now : 0;a.redraw=false;
 	if(a.resized){wl_egl_window_resize(a.win,a.pw,a.ph,0,0);projection();a.resized=false;}
 	glViewport(0,0,a.pw,a.ph);
 	/* a cleared tile isn't loaded back from memory first */
 	glDisable(GL_SCISSOR_TEST);glClear(GL_COLOR_BUFFER_BIT);glEnable(GL_SCISSOR_TEST);
 	clip(0,0,app_w,app_h);
 	app_draw();
+	modal_draw();
 	flush();
 	a.nq=a.first=0;
 	return eglSwapBuffers(a.egl,a.es);
@@ -328,7 +331,7 @@ static bool frame(void){
 /* input */
 static void key(void *data,struct wl_keyboard *k,uint32_t serial,uint32_t time,uint32_t code,uint32_t state){
 	(void)data;(void)k;(void)serial;(void)time;
-	if(state==WL_KEYBOARD_KEY_STATE_PRESSED){app_key(code);a.redraw=true;}
+	if(state==WL_KEYBOARD_KEY_STATE_PRESSED){if(!modal_key(code)){app_key(code);}a.redraw=true;}
 }
 static void keymap(void *data,struct wl_keyboard *k,uint32_t format,int32_t fd,uint32_t size){(void)data;(void)k;(void)format;(void)size;close(fd);}
 /* app may have changed meanwhile */
@@ -338,23 +341,25 @@ static void mods(void *data,struct wl_keyboard *k,uint32_t serial,uint32_t d,uin
 static void repeat(void *data,struct wl_keyboard *k,int32_t rate,int32_t delay){(void)data;(void)k;(void)rate;(void)delay;}
 static const struct wl_keyboard_listener keyboard_listener={.keymap=keymap,.enter=enter,.leave=leave,.key=key,.modifiers=mods,.repeat_info=repeat};
 
+static void touch(int state,double x,double y){if(!modal_touch(state,x,y)){app_touch(state,x,y);}}
+
 static void touch_down(void *data,struct wl_touch *t,uint32_t serial,uint32_t time,struct wl_surface *v,int32_t id,wl_fixed_t x,wl_fixed_t y){
 	(void)data;(void)t;(void)serial;(void)time;(void)v;
 	if(a.touch>=0){return;}
-	a.touch=id;app_touch(T_DOWN,wl_fixed_to_double(x)/app_scale,wl_fixed_to_double(y)/app_scale);a.redraw=true;
+	a.touch=id;touch(T_DOWN,wl_fixed_to_double(x)/app_scale,wl_fixed_to_double(y)/app_scale);a.redraw=true;
 }
 static void touch_motion(void *data,struct wl_touch *t,uint32_t time,int32_t id,wl_fixed_t x,wl_fixed_t y){
 	(void)data;(void)t;(void)time;
-	if(id==a.touch){app_touch(T_MOVE,wl_fixed_to_double(x)/app_scale,wl_fixed_to_double(y)/app_scale);a.redraw=true;}
+	if(id==a.touch){touch(T_MOVE,wl_fixed_to_double(x)/app_scale,wl_fixed_to_double(y)/app_scale);a.redraw=true;}
 }
 
 static void touch_up(void *data,struct wl_touch *t,uint32_t serial,uint32_t time,int32_t id){
 	(void)data;(void)t;(void)serial;(void)time;
-	if(id==a.touch){a.touch=-1;app_touch(T_UP,-1,-1);a.redraw=true;}
+	if(id==a.touch){a.touch=-1;touch(T_UP,-1,-1);a.redraw=true;}
 }
 
 static void touch_frame(void *data,struct wl_touch *t){(void)data;(void)t;}
-static void touch_cancel(void *data,struct wl_touch *t){(void)data;(void)t;if(a.touch>=0){a.touch=-1;app_touch(T_UP,-1,-1);a.redraw=true;}}
+static void touch_cancel(void *data,struct wl_touch *t){(void)data;(void)t;if(a.touch>=0){a.touch=-1;touch(T_UP,-1,-1);a.redraw=true;}}
 static const struct wl_touch_listener touch_listener={.down=touch_down,.up=touch_up,.motion=touch_motion,.frame=touch_frame,.cancel=touch_cancel};
 
 static void capabilities(void *data,struct wl_seat *seat,uint32_t caps){

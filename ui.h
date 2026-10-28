@@ -30,9 +30,9 @@
 #define MAX_TASKS 16
 
 /* L_APPS and L_NOTES scroll; their items belong to the app menu and the shade */
-enum{L_HOME,L_MENU,L_APPS,L_SHADE,L_NOTES,L_SHADE_TOP,L_TOAST,L_STATUS,L_COUNT};
+enum{L_HOME,L_MENU,L_APPS,L_SHADE,L_NOTES,L_SHADE_TOP,L_TOAST,L_LOCK,L_STATUS,L_COUNT};
 enum{A_NONE,A_LAUNCH,A_MENU,A_TOGGLE,A_CLOSE,A_NOTE,A_SLIDER};
-enum{G_NONE,G_SHADE_OPEN,G_SHADE,G_MENU_OPEN,G_MENU,G_HOME,G_BACK_L,G_BACK_R,G_TAP,G_HELD,G_TASKS,G_TOAST,G_NOTE,G_MENU_SCROLL,G_SHADE_SCROLL,G_SLIDER};
+enum{G_NONE,G_SHADE_OPEN,G_SHADE,G_MENU_OPEN,G_MENU,G_HOME,G_BACK_L,G_BACK_R,G_TAP,G_HELD,G_TASKS,G_TOAST,G_NOTE,G_MENU_SCROLL,G_SHADE_SCROLL,G_SLIDER,G_LOCK};
 enum{F_TEXT,F_LIGHT,F_ICON,F_COUNT};
 struct col{float r,g,b,a;};
 struct vtx{float x,y,u,v,r,g,b,a,hw,hh,rad,mode;};
@@ -72,6 +72,7 @@ struct ui{
 	char lang[12];bool lang_shown;
 	struct spring sym;int sym_focus;
 	struct spring osd;int osd_value;
+	bool locked,aod;struct spring lock,charge;
 	char wall_conf[300]; /* the config wallpaper line the texture was made from */
 };
 
@@ -88,6 +89,7 @@ extern struct toggle toggles[];
 #define I_BRIGHTNESS 0xe1ac
 #define I_VOLUME 0xe050
 #define I_VOLUME_OFF 0xe04f
+#define I_UP 0xe5ce
 
 static inline struct col rgb(uint32_t c,float a){return (struct col){(c>>16&255)/255.f*a,(c>>8&255)/255.f*a,(c&255)/255.f*a,a};}
 static inline struct col white(float a){return (struct col){a,a,a,a};}
@@ -134,6 +136,10 @@ bool symbols_touch(struct server *s,double x,double y);
 void symbols_draw(struct ui *u,struct layer *dyn);
 void shade_init(struct server *s);
 void shade_finish(struct ui *u);
+/* lock.c */
+void lock_build(struct ui *u,const char *hm,const char *date,int minute);
+void lock_step(struct ui *u,float dt);
+void lock_draw(struct server *s,struct layer *dyn);
 /* tasks.c */
 struct surface *top_window(struct server *s);
 int task_list(struct server *s,struct surface **out);

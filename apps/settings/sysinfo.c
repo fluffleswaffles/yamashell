@@ -54,15 +54,6 @@ void sysinfo_model(char *buf,size_t n){
 	if(!buf[0]){snprintf(buf,n,"Unknown device");}
 }
 
-const char *sysinfo_device(void){
-	char c[256];int len=slurp(DT "compatible",c,sizeof(c));
-	for(char *p=c;len>0 && p<c+len;p+=strlen(p)+1){
-		if(!strcmp(p,"nokia,n8")){return "n8";}
-		if(!strcmp(p,"nokia,e7")){return "e7";}
-	}
-	return "e6";
-}
-
 void sysinfo_release(char *buf,size_t n){
 	if(slurp("/etc/rapuyama-release",buf,n)>0){chomp(buf);}
 	if(!buf[0]){snprintf(buf,n,"Unknown version");}

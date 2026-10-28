@@ -56,4 +56,12 @@ void bitmap(float x,float y,int w,int h,const unsigned char *rgba,float a);
 void app_forget(const unsigned char *px);
 /* the shade's background */
 void background(void);
+
+#define MODAL_BUTTONS 3
+void modal(const char *title,const char *body,const char *const *buttons,int n,void (*done)(int));
+bool modal_shown(void);
+bool modal_step(float dt);
+void modal_draw(void);
+bool modal_touch(int state,double x,double y);
+bool modal_key(uint32_t key);
 #endif
