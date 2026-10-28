@@ -26,6 +26,7 @@
 #define ASSETS "/usr/share/yamashell/"
 #define TOAST_H 64
 #define TOAST_MS 4000
+#define MAX_TASKS 16
 
 /* L_APPS and L_NOTES scroll; their items belong to the app menu and the shade */
 enum{L_HOME,L_MENU,L_APPS,L_SHADE,L_NOTES,L_SHADE_TOP,L_TOAST,L_STATUS,L_COUNT};
@@ -58,7 +59,9 @@ struct ui{
 	struct spring shade,menu,pull,tasks,task_pos,hint,app,fly,toast,swipe;
 	float zoom_x,zoom_y;bool zoom_from; /* where the next app opens from */
 	int fly_i;pid_t fly_pid; /* a task card flying off before its app is closed */
-	int task_focus,task_lift;float lift;
+	pid_t closing[MAX_TASKS];uint32_t closing_at[MAX_TASKS];
+	int task_focus,task_lift,task_drag,gap_i;
+	struct spring lift,gap,dim;
 	float dock[4]; /* the home bar: x, y, w, h; dragging it pulls the app menu */
 	struct scroll apps_scroll,notes_scroll;float scroll_from,list_top,list_bottom; /* list_* = the shade's notes window */
 	int focus,gesture,last_minute,held_key,uevent_fd,udc_fd;
@@ -80,7 +83,6 @@ extern struct toggle toggles[];
 #define I_TASKS 0xe8eb
 #define I_BRIGHTNESS 0xe1ac
 #define I_VOLUME 0xe050
-#define MAX_TASKS 16
 
 static inline struct col rgb(uint32_t c,float a){return (struct col){(c>>16&255)/255.f*a,(c>>8&255)/255.f*a,(c&255)/255.f*a,a};}
 static inline struct col white(float a){return (struct col){a,a,a,a};}
@@ -128,8 +130,9 @@ void card(struct ui *u,int i,float *x,float *y,float *w,float *h);
 void open_tasks(struct server *s,bool on);
 pid_t window_pid(struct surface *v);
 void close_windows(struct server *s,pid_t pid);
-void task_dismiss(struct server *s,int i,float from);
+void task_dismiss(struct server *s,int i);
 void zoom_from_card(struct ui *u,int i);
+float card_alpha(struct ui *u,int i);
 void tasks_step(struct server *s,float dt);
 void draw_tasks(struct server *s);
 #endif

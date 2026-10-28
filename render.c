@@ -50,7 +50,7 @@ bool renderer_init(struct server *s){
 	if(s->egl_context==EGL_NO_CONTEXT || s->egl_surface==EGL_NO_SURFACE ||
 		!eglMakeCurrent(s->egl_display, s->egl_surface, s->egl_surface, s->egl_context)){goto fail;}
 	vs=shader(GL_VERTEX_SHADER, "attribute vec2 pos; attribute vec2 uv; uniform vec4 bounds; varying vec2 texcoord; void main(){gl_Position=vec4(bounds.xy+pos*bounds.zw,0.,1.); texcoord=uv;}");
-	fs=shader(GL_FRAGMENT_SHADER, "precision mediump float; uniform sampler2D tex; uniform float opaque; uniform float native; varying vec2 texcoord; void main(){vec4 c=texture2D(tex,texcoord); c=mix(c.bgra,c,native); gl_FragColor=vec4(c.rgb,mix(c.a,1.,opaque));}");
+	fs=shader(GL_FRAGMENT_SHADER, "precision mediump float; uniform sampler2D tex; uniform float opaque; uniform float native; uniform float fade; varying vec2 texcoord; void main(){vec4 c=texture2D(tex,texcoord); c=mix(c.bgra,c,native); gl_FragColor=vec4(c.rgb,mix(c.a,1.,opaque))*fade;}");
 	if(!vs || !fs){goto fail;}
 	s->program=glCreateProgram();
 	glAttachShader(s->program, vs); glAttachShader(s->program, fs);
@@ -75,6 +75,8 @@ bool renderer_init(struct server *s){
 	s->alpha=glGetUniformLocation(s->program, "opaque");
 	s->native=glGetUniformLocation(s->program, "native");
 	s->bounds=glGetUniformLocation(s->program, "bounds");
+	s->fade=glGetUniformLocation(s->program, "fade");
+	glUniform1f(s->fade, 1.f);
 	const GLfloat quad[]={0,0,0,0, 1,0,1,0, 0,1,0,1, 1,1,1,1};
 	glGenBuffers(1,&s->quad);
 	glBindBuffer(GL_ARRAY_BUFFER,s->quad);
@@ -192,16 +194,18 @@ static void draw(struct surface *v){
 	else{renderer_quad(v->server,l,t,r,b,v->opaque && v->rgb565);}
 }
 
-/* a window's texture anywhere on screen, in pixels: the task switcher's cards */
-void renderer_thumb(struct surface *v, float x, float y, float w, float h){
+/* a window's texture anywhere on screen, in pixels, faded by the task switcher's cards */
+void renderer_thumb(struct surface *v, float x, float y, float w, float h, float a){
 	struct server *s=v->server;
 	if(!v->texture){return;}
 	glBindTexture(GL_TEXTURE_2D, v->texture);
 	glUniform1f(s->alpha, v->opaque ? 1.f : 0.f);
 	glUniform1f(s->native, v->rgb565 ? 1.f : 0.f);
 	float l=2.f*x/screen_w-1.f, t=1.f-2.f*y/screen_h, r=2.f*(x+w)/screen_w-1.f, b=1.f-2.f*(y+h)/screen_h;
-	if(v->vc){renderer_quad(s,l,b,r,t,v->opaque);}
-	else{renderer_quad(s,l,t,r,b,v->opaque && v->rgb565);}
+	glUniform1f(s->fade,a);
+	if(v->vc){renderer_quad(s,l,b,r,t,v->opaque && a>=1);}
+	else{renderer_quad(s,l,t,r,b,v->opaque && v->rgb565 && a>=1);}
+	glUniform1f(s->fade,1.f);
 }
 
 bool renderer_frame(struct server *s){

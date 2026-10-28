@@ -246,7 +246,7 @@ static int hold_fire(void *data){
 	u->held_key=0;
 	if(key==KEY_HOMEPAGE){open_tasks(s,!is_open(&u->tasks));}
 	else if(key==KEY_MESSENGER){open_shade(s,!is_open(&u->shade));}
-	else if(key==KEY_HANGUP_PHONE && is_open(&u->tasks)){task_dismiss(s,u->task_focus,0);}
+	else if(key==KEY_HANGUP_PHONE && is_open(&u->tasks)){task_dismiss(s,u->task_focus);}
 	else if(key==KEY_HANGUP_PHONE && !u->home){struct surface *v=top_window(s);if(v){close_windows(s,window_pid(v));}}
 	return 0;
 }
@@ -305,7 +305,7 @@ bool ui_key(struct server *s,uint32_t key,uint32_t state){
 		else if(key==KEY_RIGHT && u->task_focus<n-1){u->task_focus++;}
 		else if((key==KEY_OK || key==KEY_ENTER) && u->task_focus<n){zoom_from_card(u,u->task_focus);show_app(s,list[u->task_focus]);}
 
-		else if(key==KEY_UP || key==KEY_DELETE){task_dismiss(s,u->task_focus,0);}
+		else if(key==KEY_UP || key==KEY_DELETE){task_dismiss(s,u->task_focus);}
 		else if(key==KEY_BACKSPACE || key==KEY_ESC){back(s);}
 		spring_to(&u->task_pos,(float)u->task_focus);
 		schedule_repaint(s,true);
@@ -365,7 +365,7 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 		}
 		/* the sliders show what the settings app set meanwhile */
 		else if(y<STATUS+6){u->gesture=G_SHADE_OPEN;u->dirty=true;}
-		else if(is_open(&u->tasks)){u->gesture=G_TASKS;}
+		else if(is_open(&u->tasks) && y<=screen_h-BOTTOM){u->gesture=G_TASKS;}
 		else if(is_open(&u->menu)){u->gesture=G_MENU;}
 		/* the bottom handle is home / running apps everywhere, on home the bar pulls the app menu */
 		else if(y>screen_h-BOTTOM){u->gesture=G_HOME;}
@@ -373,10 +373,12 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 		else if(u->home){u->gesture=G_TAP;}
 		else{return false;}
 		u->x=u->gesture==G_SHADE_OPEN || u->gesture==G_SHADE ? u->shade.x : u->gesture==G_MENU_OPEN || u->gesture==G_MENU ? u->menu.x : 0;
-		u->pull_home=u->gesture==G_HOME;u->task_hint=false;u->task_lift=-1;u->lift=0;
+		u->pull_home=u->gesture==G_HOME;u->task_hint=false;
 		if(u->gesture==G_TASKS){
-			struct surface *list[MAX_TASKS];int n=task_list(s,list);
-			for(int i=0;i<n;i++){float cx,cy,cw,ch;card(u,i,&cx,&cy,&cw,&ch);if(x>=cx && x<cx+cw && y>=cy && y<cy+ch){u->task_lift=i;}}
+			struct surface *list[MAX_TASKS];int n=task_list(s,list),hit=-1;
+			for(int i=0;i<n;i++){float cx,cy,cw,ch;card(u,i,&cx,&cy,&cw,&ch);if(i!=u->fly_i && x>=cx && x<cx+cw && y>=cy && y<cy+ch){hit=i;}}
+			if(hit!=u->task_lift){u->task_lift=hit;u->lift=(struct spring){0,0,0};}
+			u->task_drag=0;u->y0-=u->lift.x;
 		}
 		if(u->gesture==G_TAP || u->gesture==G_MENU || u->gesture==G_MENU_OPEN){wl_event_source_timer_update(u->press,HOLD);}
 		return true;
@@ -414,7 +416,7 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 			track(u,travel);
 			/* home, then a dead zone, then running apps; a little back off on the way down */
 			if(u->gesture==G_HOME){
-				if(!u->task_hint && travel>BACK_DIST+TASKS_DEAD){u->task_hint=true;}
+				if(!u->task_hint && travel>BACK_DIST+TASKS_DEAD && !is_open(&u->tasks)){u->task_hint=true;}
 				else if(u->task_hint && travel<BACK_DIST+TASKS_DEAD-30){u->task_hint=false;}
 				spring_to(&u->hint,u->task_hint ? 1 : 0);
 			}
@@ -422,10 +424,10 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 			else if(u->armed && p<.8f){u->armed=false;}
 			spring_to(&u->pull,u->armed ? 1 : .6f*clampf(p,0,1));
 		}
-		if(u->gesture==G_TASKS && moved){
-			float cw,cx,cy,ch;card(u,0,&cx,&cy,&cw,&ch);
-			if(fabs(dx)>fabs(dy)){u->task_pos.x=u->task_pos.to=u->task_focus-(float)dx/(cw+28);u->task_pos.v=0;u->lift=0;}
-			else if(u->task_lift>=0){u->lift=(float)fmin(0,dy);}
+		if(u->gesture==G_TASKS && (moved || u->task_drag)){
+			if(!u->task_drag){u->task_drag=fabs(dx)>fabs(dy) || u->task_lift<0 ? 1 : 2;}
+			if(u->task_drag==1){float cw,cx,cy,ch;card(u,0,&cx,&cy,&cw,&ch);u->task_pos.x=u->task_pos.to=u->task_focus-(float)dx/(cw+28);u->task_pos.v=0;}
+			else{track(u,dy);u->lift.x=u->lift.to=(float)dy;u->lift.v=0;}
 		}
 		schedule_repaint(s,true);
 		return true;
@@ -448,15 +450,18 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 	}
 	else if(g==G_TASKS){
 		struct surface *list[MAX_TASKS];int n=task_list(s,list);
-		if(!moved){
+		float v=(float)u->vel;
+		if(!u->task_drag){
 			if(u->task_lift>=0){zoom_from_card(u,u->task_lift);show_app(s,list[u->task_lift]);}
 			else if(top_window(s) && !u->home){show_app(s,top_window(s));}
 			else{open_tasks(s,false);}
-		}else if(fabs(dx)>fabs(dy)){
+		}else if(u->task_drag==1){
 			u->task_focus=(int)lroundf(clampf(u->task_pos.x,0,(float)(n>0 ? n-1 : 0)));
 			spring_to(&u->task_pos,(float)u->task_focus);
-		}else if(dy<-80 && u->task_lift>=0){task_dismiss(s,u->task_lift,u->lift);}
-		u->lift=0;
+		}
+		else if(u->task_lift<n && (dy<-80 || (v<-FLICK && dy<-30))){u->lift.v=v;task_dismiss(s,u->task_lift);}
+		else if(u->task_lift<n && (dy>80 || (v>FLICK && dy>30))){zoom_from_card(u,u->task_lift);show_app(s,list[u->task_lift]);}
+		else{spring_to(&u->lift,0);u->lift.v=v;}
 	}
 
 	else if(g==G_BACK_L || g==G_BACK_R || g==G_HOME){
@@ -464,7 +469,7 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 		if(g==G_HOME && u->task_hint){open_tasks(s,true);}
 		else if(u->armed || flick){if(g==G_HOME){go_home(s);}else{back(s);}}
 		/* a tap on the home handle opens the app menu */
-		else if(g==G_HOME && !moved && u->home){struct item *it=item_at(u,x,y);if(it){activate(s,it);}}
+		else if(g==G_HOME && !moved && u->home && !is_open(&u->tasks)){struct item *it=item_at(u,x,y);if(it){activate(s,it);}}
 		u->armed=false;u->task_hint=false;spring_to(&u->pull,0);spring_to(&u->hint,0);
 	}
 
@@ -484,7 +489,7 @@ bool ui_animating(struct server *s){
 	if(!u){return false;}
 	bool sheet=u->gesture!=G_SHADE_OPEN && u->gesture!=G_SHADE && u->gesture!=G_MENU_OPEN && u->gesture!=G_MENU;
 	/* new glyphs drawn this frame reach the atlas on the next one */
-	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0;
+	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0 || spring_moving(&u->lift) || spring_moving(&u->gap) || spring_moving(&u->dim);
 }
 /* before the windows: wallpaper and home; returns whether app windows are drawn */
 bool ui_draw_under(struct server *s){
@@ -515,6 +520,7 @@ bool ui_draw_under(struct server *s){
 	renderer_quad(s,-1,1,1,-1,true);
 	begin(s);
 	draw_layer(u,L_HOME,0,0);
+	if(u->dim.x>0){struct layer *l=&u->taskl;l->n=0;float a=fminf(u->dim.x,1);rect(l,0,0,screen_w,screen_h,0,(struct col){0,0,0,a},(struct col){0,0,0,a});draw_dynamic(u,l);}
 	end(s);
 	return u->app.x>.01f;
 }

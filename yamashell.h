@@ -72,7 +72,7 @@ struct server{
 	EGLContext egl_context;
 	EGLSurface egl_surface;
 	GLuint program, quad, opaque_program;
-	GLint alpha, native, bounds, opaque_bounds;
+	GLint alpha, native, bounds, opaque_bounds, fade;
 	const char *capture;
 	uint64_t frames, uploaded, uploads, upload_ms, present_ms;
 	uint32_t repaint_started,repaint_interval;
@@ -142,7 +142,7 @@ void renderer_vc_free(struct vc_buffer *b);
 void renderer_import(struct surface *v, const struct vc_buffer *b);
 bool renderer_frame(struct server *s);
 void renderer_quad(struct server *s, float l, float t, float r, float b, bool opaque);
-void renderer_thumb(struct surface *v, float x, float y, float w, float h);
+void renderer_thumb(struct surface *v, float x, float y, float w, float h, float a);
 void renderer_drop(struct surface *v);
 void renderer_finish(struct server *s);
 #endif
