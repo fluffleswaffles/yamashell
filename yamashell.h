@@ -59,7 +59,10 @@ struct server{
 	struct wl_list surfaces, keyboards, pointers, touches, devices, outputs, buffers;
 	struct surface *focus, *pointer_focus, *touch_focus, *cursor;
 	int hotspot_x, hotspot_y, ntouches, input_fd;
-	bool tab_grabbed, sym_grabbed, sym_shift;
+	bool tab_grabbed, sym_grabbed, sym_shift, sym_held, sticky;
+	struct wl_event_source *sym_hold;
+	int sticky_shift, sticky_fn;
+	uint32_t mod_tap;
 	char keyboard[8];
 	struct xkb_context *xkb;
 	struct xkb_keymap *keymap;
@@ -86,6 +89,7 @@ struct server{
 uint32_t milliseconds(void);
 void power_init(struct server *s);
 void power_finish(struct server *s);
+void power_settings(struct server *s);
 void power_sleep(struct server *s);
 bool power_asleep(struct server *s);
 bool power_key(struct server *s, uint32_t key, uint32_t state);
@@ -117,6 +121,7 @@ void input_key_tap(struct server *s, uint32_t key);
 
 void input_keymap(struct server *s);
 void input_language(struct server *s, char *out, size_t n);
+void input_type(struct server *s, uint32_t cp);
 #define ICON 64 /* app icons in the menu */
 #include "apps.h"
 /* a notification from the session bus, expire = milliseconds() when it closes itself, 0 = stays */
@@ -140,6 +145,7 @@ void ui_window_mapped(struct server *s, struct surface *v);
 
 
 void ui_language(struct server *s);
+void ui_symbols(struct server *s);
 bool renderer_init(struct server *s);
 bool renderer_upload(struct surface *v, struct wl_shm_buffer *buffer, struct rect r, bool fresh, bool opaque);
 /* the texture is bound when the buffer is made */

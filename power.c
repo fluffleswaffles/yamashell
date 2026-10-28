@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "yamashell.h"
+#include "config.h"
 
 struct power{
 	struct server *server;
@@ -50,6 +51,12 @@ static uint32_t timeout_ms(const char *name, unsigned seconds){
 	unsigned long n=env ? strtoul(env, &end, 10) : seconds;
 	if(env && (!*env || *end || n>86400)){n=seconds;}
 	return n*1000;
+}
+
+static uint32_t setting_ms(const char *env,const char *key,unsigned def){
+	char v[16];
+	if(!getenv(env) && config_get(key,v,sizeof(v))){int n=atoi(v);if(n>=0 && n<=86400){def=(unsigned)n;}}
+	return timeout_ms(env,def);
 }
 
 static void arm(struct power *p){
@@ -176,14 +183,20 @@ void power_init(struct server *s){
 	p->key_brightness=p->key_value=read_value(keyboard);
 	if(p->key_brightness<1){p->key_brightness=229;}
 	if(p->key_value<0){p->keyboard=NULL;}
-	p->dim_ms=timeout_ms("YAMASHELL_DIM_SECONDS", 30);
-	p->off_ms=timeout_ms("YAMASHELL_SLEEP_SECONDS", 60);
 	p->key_ms=timeout_ms("YAMASHELL_KEYLIGHT_SECONDS", 5);
 	p->activity=p->key_activity=milliseconds();
 	p->timer=wl_event_loop_add_timer(s->loop, tick, p);
 	if(!p->timer){free(p);return;}
 	s->power=p;
 	write_value(p->keyboard, 0, &p->key_value);
+	power_settings(s);
+}
+
+void power_settings(struct server *s){
+	struct power *p=s->power;
+	if(!p){return;}
+	p->dim_ms=setting_ms("YAMASHELL_DIM_SECONDS","dim_seconds",30);
+	p->off_ms=setting_ms("YAMASHELL_SLEEP_SECONDS","sleep_seconds",60);
 	arm(p);
 }
 

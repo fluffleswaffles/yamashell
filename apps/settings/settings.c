@@ -33,15 +33,15 @@
 #define DEVICE 150
 #define INFOS 24
 
-enum{K_NONE,K_WALLS,K_APPS,K_ABOUT,K_KEYBOARD};
+enum{K_NONE,K_WALLS,K_APPS,K_ABOUT,K_KEYBOARD,K_DISPLAY};
 struct section{const char *title,*sub;uint32_t icon;int level,kind;struct{const char *title;uint32_t icon;}rows[4];};
 static const struct section sections[]={
 	{"Connections","Wi-Fi, Bluetooth, SIM",0xe63e,-1,K_NONE,{{"Wi-Fi",0xe63e},{"Bluetooth",0xe1a7},{"SIM",0xe32b}}},
 	{"Sounds and vibration","Volume, vibration",0xe050,LEVEL_VOLUME,K_NONE,{{"Vibration",0xe62d}}},
 	{"Notifications","App notifications",0xe7f4,-1,K_NONE,{{0}}},
-	{"Display","Brightness",0xe1ac,LEVEL_BRIGHTNESS,K_NONE,{{0}}},
+	{"Display","Brightness, screen timeout",0xe1ac,LEVEL_BRIGHTNESS,K_DISPLAY,{{0}}},
 	{"Wallpapers","Home screen picture",0xe1bc,-1,K_WALLS,{{0}}},
-	{"Keyboard","Layout, language switch",0xe312,-1,K_KEYBOARD,{{0}}},
+	{"Keyboard","Layout, language, one-touch keys",0xe312,-1,K_KEYBOARD,{{0}}},
 	{"Lock screen","Screen lock",0xe897,-1,K_NONE,{{0}}},
 	{"Security","Passwords, encryption",0xe32a,-1,K_NONE,{{0}}},
 	{"Apps","Installed apps",0xe5c3,-1,K_APPS,{{0}}},
@@ -56,6 +56,7 @@ static const struct{const char *conf,*title;}switches[]={{"sym","Sym"},{"shift_s
 #define NKBDS (int)(sizeof(kbds)/sizeof(*kbds))
 #define NSWITCHES (int)(sizeof(switches)/sizeof(*switches))
 static int kbd_pick,switch_pick,is_e6=-1;
+static bool sticky=true;
 
 static bool section_shown(int i){
 	if(is_e6<0){is_e6=!strcmp(sysinfo_device(),"e6");}
@@ -63,7 +64,14 @@ static bool section_shown(int i){
 }
 
 /* what a touch or OK hits on the screen in front, rebuilt with every frame */
-enum{H_OPEN,H_BACK,H_SLIDER,H_WALL,H_APP,H_LAUNCH,H_CHOICE};
+enum{H_OPEN,H_BACK,H_SLIDER,H_WALL,H_APP,H_LAUNCH,H_CHOICE,H_KEY,H_PICK};
+enum{P_CONTACTS,P_MESSAGES,P_DIM,P_SLEEP};
+static const struct{const char *title,*conf,*none;int def,times[7];}pickers[]={
+	{"Contacts key","key_contacts","Nothing",0,{0}},{"Messages key","key_messages","App menu",0,{0}},
+	{"Dim the screen after","dim_seconds",NULL,30,{15,30,60,120,0,-1}},
+	{"Turn the screen off after","sleep_seconds",NULL,60,{30,60,120,300,600,0,-1}},
+};
+static int picking=-1;
 struct hit{int act,arg;float x,y,w,h;};
 enum{G_NONE,G_TAP,G_SCROLL,G_SLIDER};
 
@@ -223,6 +231,34 @@ static void choice(float ox,float y,float h,int arg,const char *title,const char
 	else{fill(cx-12,cy-12,24,24,12,C_WHITE,C_WHITE,.5f*a);fill(cx-10,cy-10,20,20,10,C_TILE2,C_TILE2,a);}
 }
 
+static int onekey_app(int k){
+	char exec[512];
+	if(!config_get(pickers[k].conf,exec,sizeof(exec)) || !exec[0]){return -1;}
+	for(int i=0;i<napps;i++){if(!strcmp(apps[i].exec,exec)){return i;}}
+	return -1;
+}
+
+static int picker_time(int k){
+	char v[16];
+	return config_get(pickers[k].conf,v,sizeof(v)) ? atoi(v) : pickers[k].def;
+}
+
+static void time_text(int sec,char *buf,size_t n){
+	if(!sec){snprintf(buf,n,"Never");}
+	else if(sec<60){snprintf(buf,n,"%d seconds",sec);}
+	else{snprintf(buf,n,sec==60 ? "%d minute" : "%d minutes",sec/60);}
+}
+
+static void picker_row(float ox,float y,int k,bool front){
+	char buf[32];const char *v;
+	if(k<P_DIM){int a=onekey_app(k);v=a>=0 ? apps[a].name : pickers[k].none;}
+	else{time_text(picker_time(k),buf,sizeof(buf));v=buf;}
+	if(front && 16+k==pressed){fill(ox+6,y+2,app_w-12,ROW-4,10,0x144c80,0x08335c,.35f*press.x);}
+	if(front){hit(H_KEY,k,ox,y,app_w,ROW);}
+	text(F_TEXT,ox+20,y+31,pickers[k].title,19,C_WHITE,1,0);
+	text(F_TEXT,ox+20,y+54,v,15,C_WHITE,.65f,0);
+}
+
 static void draw_keyboard(float ox,float y,bool front){
 	text(F_TEXT,ox+20,y+6,"Keyboard version",15,C_WHITE,.65f,0);
 	y+=18;
@@ -239,6 +275,23 @@ static void draw_keyboard(float ox,float y,bool front){
 		if(i<NSWITCHES-1){separator(ox+20,y+ROW-17,ox+app_w);}
 	}
 	if(a<1){text(F_TEXT,ox+20,y+22,"This keyboard has one language",15,C_WHITE,.65f,0);y+=30;}
+	y+=20;
+	text(F_TEXT,ox+20,y+6,"Shift and Fn",15,C_WHITE,.65f,0);
+	y+=18;
+	choice(ox,y,ROW,12,"Sticky Shift and Fn","Tap once for one key, twice to lock",sticky,1,front);
+	y+=ROW+20;
+	text(F_TEXT,ox+20,y+6,"One-touch keys",15,C_WHITE,.65f,0);
+	y+=18;
+	picker_row(ox,y,P_CONTACTS,front);separator(ox+20,y+ROW-1,ox+app_w);y+=ROW;
+	picker_row(ox,y,P_MESSAGES,front);y+=ROW;
+	text(F_TEXT,ox+20,y+22,"Holding a key keeps its own action",15,C_WHITE,.65f,0);
+	pagel.max=fmaxf(0,y+30+pagel.x+12-app_h);
+}
+
+static void draw_display(float ox,float y,bool front){
+	separator(ox+16,y-1,ox+app_w);
+	picker_row(ox,y,P_DIM,front);separator(ox+20,y+ROW-1,ox+app_w);y+=ROW;
+	picker_row(ox,y,P_SLEEP,front);y+=ROW;
 	pagel.max=fmaxf(0,y+pagel.x+12-app_h);
 }
 
@@ -331,6 +384,7 @@ static void draw_page(float ox,bool front){
 	if(s->level>=0){
 		slider(ox,y,s->level,s->icon,front);
 		y+=SLIDER_H;
+		if(s->kind==K_DISPLAY){draw_display(ox,y,front);return;}
 		if(s->rows[0].title){separator(ox+16,y-1,ox+app_w);}
 	}
 	for(int i=0;i<4 && s->rows[i].title;i++,y+=ROW){
@@ -343,6 +397,38 @@ static void draw_page(float ox,bool front){
 		icon(ox+app_w/2.f,cy,s->icon,48,C_WHITE,.5f);
 		text(F_TEXT,ox+app_w/2.f,cy+80,"Nothing here yet",17,C_WHITE,.65f,1);
 	}
+}
+
+static void draw_picker(float ox,bool front){
+	float top=-subl.x,y=TOP+top;
+	header(ox,top,pickers[picking].title,front);
+	if(picking>=P_DIM){
+		int cur=picker_time(picking);char buf[32];
+		for(int i=0;pickers[picking].times[i]>=0;i++,y+=ROW-16){
+			time_text(pickers[picking].times[i],buf,sizeof(buf));
+			choice(ox,y,ROW-16,i,buf,NULL,pickers[picking].times[i]==cur,1,front);
+			if(pickers[picking].times[i+1]>=0){separator(ox+20,y+ROW-17,ox+app_w);}
+		}
+		subl.max=fmaxf(0,y+subl.x+12-app_h);
+		return;
+	}
+	int cur=onekey_app(picking);
+	choice(ox,y,ROW-16,0,pickers[picking].none,NULL,cur<0,1,front);
+	separator(ox+20,y+ROW-17,ox+app_w);
+	y+=ROW-16;
+	for(int i=0;i<napps;i++,y+=ROW){
+		if(y+ROW<=0 || y>=app_h){if(front){hit(H_PICK,i+1,ox,y,app_w,ROW);}continue;}
+		if(front && i+1==pressed){fill(ox+6,y+2,app_w-12,ROW-4,10,0x144c80,0x08335c,.35f*press.x);}
+		if(front){hit(H_PICK,i+1,ox,y,app_w,ROW);}
+		if(apps[i].icon){bitmap(ox+16,y+13,PX(APP_ICON),PX(APP_ICON),apps[i].icon,1);}
+		else{tile(ox+16,y+13,APP_ICON,0xe5c3,1);}
+		text(F_TEXT,ox+76,y+42,apps[i].name,19,C_WHITE,1,0);
+		float cx=ox+app_w-34,cy=y+ROW/2.f;
+		if(i==cur){fill(cx-13,cy-13,26,26,13,C_ACCENT,C_ACCENT2,1);icon(cx,cy,I_CHECK,18,C_WHITE,1);}
+		else{fill(cx-12,cy-12,24,24,12,C_WHITE,C_WHITE,.5f);fill(cx-10,cy-10,20,20,10,C_TILE2,C_TILE2,1);}
+		if(i<napps-1){separator(ox+76,y+ROW-1,ox+app_w);}
+	}
+	subl.max=fmaxf(0,y+subl.x+12-app_h);
 }
 
 void app_draw(void){
@@ -359,9 +445,10 @@ void app_draw(void){
 		draw_page(px-app_w*.3f*sub.x,on_page);
 		fill(px,0,dx-px,app_h,0,0,0,.5f*clampf(sub.x,0,1));
 	}
-	if(detail>=0 && dx<app_w){
+	if((detail>=0 || picking>=0) && dx<app_w){
 		clip(dx,0,app_w,app_h);background();
-		draw_detail(dx,is_open(&sub));
+		if(detail>=0){draw_detail(dx,is_open(&sub));}
+		else{draw_picker(dx,is_open(&sub));}
 	}
 }
 
@@ -390,6 +477,7 @@ bool app_step(float dt){
 	}
 	if(gesture!=G_SCROLL){scroll_step(&list,dt);scroll_step(&pagel,dt);scroll_step(&subl,dt);m|=scroll_moving(&list) || scroll_moving(&pagel) || scroll_moving(&subl);}
 
+	if(!is_open(&sub) && !spring_moving(&sub)){picking=-1;}
 	if(!is_open(&sub) && !spring_moving(&sub) && detail>=0){detail=-1;subl=(struct scroll){0};app_forget(detail_icon);free(detail_icon);detail_icon=NULL;}
 	if(!is_open(&slide) && !spring_moving(&slide)){page=-1;}
 	if(press.x==0 && !spring_moving(&press)){pressed=-1;}
@@ -401,7 +489,7 @@ static void open_page(int i){
 	page=i;spring_to(&slide,1);focus=-1;pressed=-1;
 	if(sections[i].kind==K_WALLS){load_walls();}
 	/* read again on every visit: apps get installed, the battery drains */
-	if(sections[i].kind==K_APPS){
+	if(sections[i].kind==K_APPS || sections[i].kind==K_KEYBOARD){
 		for(int k=0;k<napps;k++){app_forget(apps[k].icon);}
 		apps_free(apps,napps);napps=apps_load(&apps,PX(APP_ICON));
 	}
@@ -419,6 +507,8 @@ static void open_page(int i){
 		for(int k=0;k<NKBDS;k++){if(!strcmp(v,kbds[k].conf)){kbd_pick=k;}}
 		v[0]=0;config_get("layout_switch",v,sizeof(v));
 		for(int k=0;k<NSWITCHES;k++){if(!strcmp(v,switches[k].conf)){switch_pick=k;}}
+		v[0]=0;config_get("sticky_keys",v,sizeof(v));
+		sticky=strcmp(v,"off")!=0;
 	}
 }
 
@@ -457,6 +547,10 @@ static void activate(struct hit *h){
 	else if(h->act==H_WALL && h->arg!=picked){picked=h->arg;config_set("wallpaper",walls[picked].path);pick=(struct spring){0,0,1};}
 	else if(h->act==H_APP){open_detail(h->arg);}
 	else if(h->act==H_LAUNCH){launch(apps[detail].exec);}
+	else if(h->act==H_KEY){picking=h->arg;spring_to(&sub,1);focus=-1;subl=(struct scroll){0};}
+	else if(h->act==H_CHOICE && picking>=P_DIM){char v[16];snprintf(v,sizeof(v),"%d",pickers[picking].times[h->arg]);config_set(pickers[picking].conf,v);back();}
+	else if(h->act==H_PICK || (h->act==H_CHOICE && picking>=0)){config_set(pickers[picking].conf,h->arg ? apps[h->arg-1].exec : "");back();}
+	else if(h->act==H_CHOICE && h->arg==12){sticky=!sticky;config_set("sticky_keys",sticky ? "on" : "off");}
 	else if(h->act==H_CHOICE && h->arg<8){kbd_pick=h->arg;config_set("keyboard",kbds[kbd_pick].conf);}
 	else if(h->act==H_CHOICE){switch_pick=h->arg-8;config_set("layout_switch",switches[switch_pick].conf);}
 	else if(h->act==H_BACK){back();}
@@ -469,7 +563,7 @@ static void move_focus(int dir){
 	if(i<0 || i>=nhits){return;}
 	focus=i;
 	struct hit *h=&hits[i];
-	if(h->act==H_OPEN || h->act==H_WALL || h->act==H_APP || h->act==H_CHOICE){
+	if(h->act==H_OPEN || h->act==H_WALL || h->act==H_APP || h->act==H_CHOICE || h->act==H_KEY || h->act==H_PICK){
 		struct scroll *sc=scroller();
 		if(h->y<0){sc->x+=h->y-(i==0 || (h->act==H_WALL && h->arg<wall_cols()) || (h->act==H_APP && h->arg==0) ? TOP+18 : 0);}
 		else if(h->y+h->h>app_h){sc->x+=h->y+h->h-app_h;}
@@ -505,7 +599,7 @@ void app_touch(int state,double x,double y){
 		down_x=x;down_y=y;last_y=y;vel=0;move_time=app_ms();keys=false;
 		gesture=h && h->act==H_SLIDER ? G_SLIDER : G_TAP;
 		if(gesture==G_SLIDER){focus=(int)(h-hits);set_slider(h,x);spring_to(&knob,1);}
-		else if(h && (h->act==H_OPEN || h->act==H_WALL || h->act==H_APP || h->act==H_CHOICE)){pressed=h->arg;press=(struct spring){1,0,1};}
+		else if(h && (h->act==H_OPEN || h->act==H_WALL || h->act==H_APP || h->act==H_CHOICE || h->act==H_KEY || h->act==H_PICK)){pressed=h->act==H_KEY ? 16+h->arg : h->arg;press=(struct spring){1,0,1};}
 		scroller()->v=0;
 		return;
 	}

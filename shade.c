@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <linux/input.h>
 #include "ui.h"
 
 struct toggle toggles[]={{"WLAN",0xe648,false,true},{"Bluetooth",0xe1a9,false,true},{"Silent",0xe04f,false,false},{"Torch",0xe3e7,false,false}};
@@ -203,6 +204,73 @@ void osd_draw(struct ui *u,struct layer *dyn){
 	rect(dyn,tx,y+h/2-3,tw,6,3,white(.25f),white(.25f));
 	if(v){rect(dyn,tx,y+h/2-3,tw*v/100.f,6,3,rgb(0x3cb2ff,1),rgb(0x0b72c9,1));}
 	text(u,dyn,F_TEXT,x+w-18,y+30,buf,16,white(.9f),2);
+}
+
+static const char *const symbols[]={"€","£","¥","$","&","^","|","~","`","[","]","{","}","<",">","\\","°","§","«","»","–","—","…","•","±","×","÷","№","ё","Ё","¡","¿"};
+#define NSYMBOLS (int)(sizeof(symbols)/sizeof(*symbols))
+#define SYM_COLS 8
+#define SYM_CELL 40
+
+static void symbols_panel(struct ui *u,float *x,float *y,float *w,float *h){
+	*w=SYM_COLS*SYM_CELL+16;*h=(NSYMBOLS+SYM_COLS-1)/SYM_COLS*SYM_CELL+16;
+	*x=(screen_w-*w)/2;*y=screen_h-*h-12+(1-u->sym.x)*(*h+24);
+}
+
+void ui_symbols(struct server *s){
+	struct ui *u=s->ui;
+	if(!u){return;}
+	bool on=!is_open(&u->sym);
+
+	if(on && (!s->focus || u->home)){return;}
+	spring_to(&u->sym,on ? 1 : 0);
+	if(on){u->sym_focus=0;}
+	schedule_repaint(s,true);
+}
+
+static void symbol_pick(struct server *s,int i){
+	const char *p=symbols[i];
+	spring_to(&s->ui->sym,0);schedule_repaint(s,true);
+	input_type(s,utf8(&p));
+}
+
+bool symbols_key(struct server *s,uint32_t key,uint32_t state){
+	struct ui *u=s->ui;int f=u->sym_focus;
+	if(!is_open(&u->sym)){return false;}
+	if(!state){return true;}
+	if(key==KEY_LEFT && f%SYM_COLS){f--;}
+	else if(key==KEY_RIGHT && f%SYM_COLS<SYM_COLS-1 && f+1<NSYMBOLS){f++;}
+	else if(key==KEY_UP && f>=SYM_COLS){f-=SYM_COLS;}
+	else if(key==KEY_DOWN && f+SYM_COLS<NSYMBOLS){f+=SYM_COLS;}
+	else if(key==KEY_OK || key==KEY_ENTER){symbol_pick(s,f);return true;}
+	else if(key!=KEY_LEFT && key!=KEY_RIGHT && key!=KEY_UP && key!=KEY_DOWN){
+
+		spring_to(&u->sym,0);schedule_repaint(s,true);
+		return key==KEY_ESC || key==KEY_BACKSPACE;
+	}
+	u->sym_focus=f;schedule_repaint(s,true);
+	return true;
+}
+
+bool symbols_touch(struct server *s,double x,double y){
+	struct ui *u=s->ui;float px,py,pw,ph;
+	if(!is_open(&u->sym)){return false;}
+	symbols_panel(u,&px,&py,&pw,&ph);
+	int c=(int)floor((x-px-8)/SYM_CELL),r=(int)floor((y-py-8)/SYM_CELL),i=r*SYM_COLS+c;
+	if(c>=0 && c<SYM_COLS && r>=0 && i<NSYMBOLS){symbol_pick(s,i);}
+	else{spring_to(&u->sym,0);schedule_repaint(s,true);}
+	return true;
+}
+
+void symbols_draw(struct ui *u,struct layer *dyn){
+	float px,py,pw,ph;
+	if(u->sym.x<=.01f){return;}
+	symbols_panel(u,&px,&py,&pw,&ph);
+	rect(dyn,px,py,pw,ph,16,rgb(0x333333,.97f),rgb(0x1a1a1a,.97f));
+	for(int i=0;i<NSYMBOLS;i++){
+		float x=px+8+(i%SYM_COLS)*SYM_CELL,y=py+8+(i/SYM_COLS)*SYM_CELL;
+		if(i==u->sym_focus){rect(dyn,x+2,y+2,SYM_CELL-4,SYM_CELL-4,8,rgb(0x3cb2ff,1),rgb(0x0b72c9,1));}
+		text(u,dyn,F_TEXT,x+SYM_CELL/2.f,y+SYM_CELL/2.f+7,symbols[i],20,white(1),1);
+	}
 }
 
 bool toast_shown(struct ui *u){return is_open(&u->toast) && toast_note(u);}

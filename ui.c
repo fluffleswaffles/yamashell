@@ -141,6 +141,13 @@ static void launch(struct server *s,int i){
 	spring_to(&u->menu,0);schedule_repaint(s,true);
 }
 
+static int one_touch(struct ui *u,const char *conf){
+	char exec[512];
+	if(!config_get(conf,exec,sizeof(exec)) || !exec[0]){return -1;}
+	for(int i=0;i<u->napps;i++){if(u->apps[i].exec && !strcmp(u->apps[i].exec,exec)){return i;}}
+	return -1;
+}
+
 static int reap(int sig,void *data){
 	struct server *s=data;struct ui *u=s->ui;
 	(void)sig;
@@ -158,6 +165,7 @@ static int conf_changed(int fd,uint32_t mask,void *data){
 	config_get("wallpaper",w,sizeof(w));
 	if(strcmp(w,u->wall_conf)){snprintf(u->wall_conf,sizeof(u->wall_conf),"%s",w);wallpaper(u);schedule_repaint(s,true);}
 	input_keymap(s);
+	power_settings(s);
 	return 0;
 }
 
@@ -294,6 +302,9 @@ bool ui_key(struct server *s,uint32_t key,uint32_t state){
 		if(state){level_set(LEVEL_VOLUME,level_get(LEVEL_VOLUME)+(key==KEY_VOLUMEUP ? 10 : -10));osd_show(s);u->dirty=true;}
 		return true;
 	}
+	if(symbols_key(s,key,state)){return true;}
+	int app=key==KEY_ADDRESSBOOK ? one_touch(u,"key_contacts") : -1;
+	if(app>=0){if(state){launch(s,app);}return true;}
 	if(key==KEY_HOMEPAGE || key==KEY_MESSENGER || key==KEY_HANGUP_PHONE){
 		if(state){if(!u->held_key){u->held_key=key;wl_event_source_timer_update(u->hold,HOLD);}return true;}
 		if(u->held_key!=(int)key){return true;} /* the long press already fired */
@@ -303,7 +314,7 @@ bool ui_key(struct server *s,uint32_t key,uint32_t state){
 			else{open_menu(s,!is_open(&u->menu));}
 		}
 
-		else if(key==KEY_MESSENGER){open_menu(s,!is_open(&u->menu));}
+		else if(key==KEY_MESSENGER){int a=one_touch(u,"key_messages");if(a>=0){launch(s,a);}else{open_menu(s,!is_open(&u->menu));}}
 
 		else{back(s);}
 		return true;
@@ -366,6 +377,7 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 	if(!u || (id!=0 && u->gesture==G_NONE)){return false;}
 	if(id!=0){return true;}
 	if(state==1){
+		if(symbols_touch(s,x,y)){u->gesture=G_HELD;return true;}
 		u->x0=x;u->y0=y;u->y=y;u->keys=false;u->vel=0;u->move_time=milliseconds();u->armed=false;
 		if(toast_shown(u) && y>=STATUS+6 && y<STATUS+6+TOAST_H){u->gesture=G_TOAST;}
 		else if(x<EDGE){u->gesture=G_BACK_L;}
@@ -501,7 +513,7 @@ bool ui_animating(struct server *s){
 	if(!u){return false;}
 	bool sheet=u->gesture!=G_SHADE_OPEN && u->gesture!=G_SHADE && u->gesture!=G_MENU_OPEN && u->gesture!=G_MENU;
 	/* new glyphs drawn this frame reach the atlas on the next one */
-	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0 || spring_moving(&u->lift) || spring_moving(&u->gap) || spring_moving(&u->dim) || spring_moving(&u->osd);
+	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0 || spring_moving(&u->lift) || spring_moving(&u->gap) || spring_moving(&u->dim) || spring_moving(&u->osd) || spring_moving(&u->sym);
 }
 /* before the windows: wallpaper and home; returns whether app windows are drawn */
 bool ui_draw_under(struct server *s){
@@ -519,6 +531,7 @@ bool ui_draw_under(struct server *s){
 	spring_step(&u->app,dt,300);
 	spring_step(&u->toast,dt,300);
 	spring_step(&u->osd,dt,300);
+	spring_step(&u->sym,dt,400);
 	if(u->gesture!=G_MENU_SCROLL){scroll_step(&u->apps_scroll,dt);}
 	if(u->gesture!=G_SHADE_SCROLL){scroll_step(&u->notes_scroll,dt);}
 	shade_step(u,dt);
@@ -586,6 +599,7 @@ void ui_draw_over(struct server *s){
 	draw_pull(u,dyn);
 	shade_draw_swipe(u,dyn);
 	osd_draw(u,dyn);
+	symbols_draw(u,dyn);
 	if(u->dirty_y1>u->dirty_y0){u->dirty=true;}
 	draw_dynamic(u,dyn);
 	end(s);

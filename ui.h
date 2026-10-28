@@ -69,7 +69,8 @@ struct ui{
 	double x0,y0,x,y,vel;
 	uint32_t anim_time,move_time;
 	struct wl_event_source *clock,*hold,*press,*child,*poll,*uevent,*udc,*toast_hide,*conf,*osd_hide;
-	char lang[4];bool lang_shown;
+	char lang[12];bool lang_shown;
+	struct spring sym;int sym_focus;
 	struct spring osd;int osd_value;
 	char wall_conf[300]; /* the config wallpaper line the texture was made from */
 };
@@ -127,6 +128,10 @@ void shade_step(struct ui *u,float dt);
 void shade_draw_swipe(struct ui *u,struct layer *dyn);
 void osd_show(struct server *s);
 void osd_draw(struct ui *u,struct layer *dyn);
+
+bool symbols_key(struct server *s,uint32_t key,uint32_t state);
+bool symbols_touch(struct server *s,double x,double y);
+void symbols_draw(struct ui *u,struct layer *dyn);
 void shade_init(struct server *s);
 void shade_finish(struct ui *u);
 /* tasks.c */

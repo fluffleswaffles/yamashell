@@ -56,6 +56,87 @@ void input_focus(struct server *s,struct surface *v){
 	data_focus(s);
 }
 
+static void send_modifiers(struct server *s){
+	uint32_t serial=wl_display_next_serial(s->display);struct input_resource *i;
+	wl_list_for_each(i,&s->keyboards,link){if(same_client(i->resource,s->focus)){modifiers(s,i->resource,serial);}}
+}
+
+/* sticky keys */
+static void sticky_apply(struct server *s){
+	xkb_mod_mask_t shift=1u<<xkb_keymap_mod_get_index(s->keymap,XKB_MOD_NAME_SHIFT),caps=1u<<xkb_keymap_mod_get_index(s->keymap,XKB_MOD_NAME_CAPS);
+	xkb_mod_index_t lv3=xkb_keymap_mod_get_index(s->keymap,"Mod5");
+	xkb_mod_mask_t fn=lv3==XKB_MOD_INVALID ? 0 : 1u<<lv3;
+	xkb_mod_mask_t latched=(s->sticky_shift==1 ? shift : 0)|(s->sticky_fn==1 ? fn : 0);
+	xkb_mod_mask_t locked=(xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_LOCKED)&~(caps|fn))|(s->sticky_shift==2 ? caps : 0)|(s->sticky_fn==2 ? fn : 0);
+	xkb_state_update_mask(s->keys,xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_DEPRESSED),latched,locked,0,0,
+		xkb_state_serialize_layout(s->keys,XKB_STATE_LAYOUT_EFFECTIVE));
+	send_modifiers(s);
+	ui_language(s);
+}
+
+static bool modifier(uint32_t key){
+	return key==KEY_LEFTSHIFT || key==KEY_RIGHTSHIFT || key==KEY_LEFTCTRL || key==KEY_RIGHTCTRL || key==KEY_LEFTALT || key==KEY_RIGHTALT || key==KEY_LEFTMETA || key==KEY_RIGHTMETA;
+}
+
+static void sticky_used(struct server *s){
+	bool changed=false;
+	if(s->sticky_shift==1){s->sticky_shift=0;changed=true;}
+	if(s->sticky_fn==1){s->sticky_fn=0;changed=true;}
+	if(changed){sticky_apply(s);}
+}
+
+static void next_layout(struct server *s){
+	xkb_layout_index_t next=(xkb_state_serialize_layout(s->keys,XKB_STATE_LAYOUT_EFFECTIVE)+1)%xkb_keymap_num_layouts(s->keymap);
+	xkb_state_update_mask(s->keys,xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_DEPRESSED),xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_LATCHED),
+		xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_LOCKED),0,0,next);
+	send_modifiers(s);
+	ui_language(s);
+}
+
+static int sym_hold(void *data){
+	struct server *s=data;
+	if(s->sym_grabbed){s->sym_held=true;ui_symbols(s);}
+	return 0;
+}
+
+static void sym_key(struct server *s,uint32_t state){
+	bool two=xkb_keymap_num_layouts(s->keymap)>1;
+	if(state){
+		bool shifted=xkb_state_mod_name_is_active(s->keys,XKB_MOD_NAME_SHIFT,XKB_STATE_MODS_EFFECTIVE);
+		s->sym_grabbed=true;s->sym_held=false;
+		if(two && s->sym_shift && shifted){next_layout(s);s->sym_held=true;sticky_used(s);}
+		else if(two && !s->sym_shift){wl_event_source_timer_update(s->sym_hold,500);}
+		else{s->sym_held=true;ui_symbols(s);}
+		return;
+	}
+	wl_event_source_timer_update(s->sym_hold,0);
+	if(s->sym_grabbed && !s->sym_held){next_layout(s);}
+	s->sym_grabbed=false;
+}
+
+void input_type(struct server *s,uint32_t cp){
+	char name[64],text[512];
+	xkb_keysym_t sym=xkb_utf32_to_keysym(cp);
+	if(sym==XKB_KEY_NoSymbol || xkb_keysym_get_name(sym,name,sizeof(name))<0 || !s->focus){return;}
+	int len=snprintf(text,sizeof(text),"xkb_keymap {\n xkb_keycodes \"y\" { minimum = 8; maximum = 255; <K1> = 9; };\n"
+		" xkb_types \"y\" { include \"complete\" };\n xkb_compat \"y\" { include \"complete\" };\n"
+		" xkb_symbols \"y\" { key <K1> { [ %s ] }; };\n};\n",name);
+	int fd=memfd_create("yamashell-type",MFD_CLOEXEC);
+	if(fd<0 || len<0 || len>=(int)sizeof(text) || write(fd,text,(size_t)len+1)!=len+1){if(fd>=0){close(fd);}return;}
+	uint32_t time=milliseconds();struct input_resource *i;
+	wl_list_for_each(i,&s->keyboards,link){
+		if(!same_client(i->resource,s->focus)){continue;}
+		wl_keyboard_send_keymap(i->resource,WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,fd,(uint32_t)len+1);
+		wl_keyboard_send_modifiers(i->resource,wl_display_next_serial(s->display),0,0,0,0);
+		wl_keyboard_send_key(i->resource,wl_display_next_serial(s->display),time,1,WL_KEYBOARD_KEY_STATE_PRESSED);
+		wl_keyboard_send_key(i->resource,wl_display_next_serial(s->display),time,1,WL_KEYBOARD_KEY_STATE_RELEASED);
+		wl_keyboard_send_keymap(i->resource,WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,s->keymap_fd,s->keymap_size);
+		modifiers(s,i->resource,wl_display_next_serial(s->display));
+	}
+	close(fd);
+	sticky_used(s);
+}
+
 void input_key(struct server *s,uint32_t time,uint32_t key,uint32_t state){
 	if(key>KEY_MAX || state>1){return;}
 	if(power_key(s,key,state)){return;}
@@ -65,19 +146,15 @@ void input_key(struct server *s,uint32_t time,uint32_t key,uint32_t state){
 	if(!state && n<s->npressed){s->pressed[n]=s->pressed[--s->npressed];}
 
 	xkb_state_update_key(s->keys,key+8,state ? XKB_KEY_DOWN : XKB_KEY_UP);
-	if(key==KEY_COMPOSE && !state && s->sym_grabbed){s->sym_grabbed=false;return;}
-	if(key==KEY_COMPOSE && state && xkb_keymap_num_layouts(s->keymap)>1 &&
-		(!s->sym_shift || xkb_state_mod_name_is_active(s->keys,XKB_MOD_NAME_SHIFT,XKB_STATE_MODS_EFFECTIVE))){
-		xkb_layout_index_t next=(xkb_state_serialize_layout(s->keys,XKB_STATE_LAYOUT_EFFECTIVE)+1)%xkb_keymap_num_layouts(s->keymap);
-		xkb_state_update_mask(s->keys,xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_DEPRESSED),xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_LATCHED),
-			xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_LOCKED),0,0,next);
-		s->sym_grabbed=true;
-		uint32_t serial=wl_display_next_serial(s->display);struct input_resource *i;
-		wl_list_for_each(i,&s->keyboards,link){if(same_client(i->resource,s->focus)){modifiers(s,i->resource,serial);}}
-		ui_language(s);
-		return;
+
+	bool sticky=s->sticky && (key==KEY_LEFTSHIFT || key==KEY_RIGHTSHIFT || key==KEY_RIGHTALT),tapped=false;
+	if(state){s->mod_tap=sticky ? key : 0;}
+	else if(sticky && s->mod_tap==key){
+		int *st=key==KEY_RIGHTALT ? &s->sticky_fn : &s->sticky_shift;
+		*st=(*st+1)%3;s->mod_tap=0;tapped=true;
 	}
-	if(ui_key(s,key,state)){return;}
+	if(key==KEY_COMPOSE && (state || s->sym_grabbed)){sym_key(s,state);return;}
+	if(ui_key(s,key,state)){if(tapped){sticky_apply(s);}return;}
 	if(key==KEY_TAB && !state && s->tab_grabbed){s->tab_grabbed=false;return;}
 	if(state && key==KEY_TAB && xkb_state_mod_name_is_active(s->keys,XKB_MOD_NAME_ALT,XKB_STATE_MODS_EFFECTIVE)){
 		s->tab_grabbed=true;
@@ -91,6 +168,8 @@ void input_key(struct server *s,uint32_t time,uint32_t key,uint32_t state){
 	wl_list_for_each(i,&s->keyboards,link){if(same_client(i->resource,s->focus)){
 		wl_keyboard_send_key(i->resource,serial,time,key,state);modifiers(s,i->resource,serial);
 	}}
+	if(tapped){sticky_apply(s);}
+	else if(state && !modifier(key)){sticky_used(s);}
 }
 
 void input_key_tap(struct server *s,uint32_t key){
@@ -249,9 +328,11 @@ static int device_read(int fd,uint32_t mask,void *data){
 static const struct{const char *name,*layout,*variant;}keyboards[]={{"ru","e6,e6",",ru"},{"en","e6","en"},{"fi","e6","fi"}};
 
 void input_keymap(struct server *s){
-	char kb[8]="",sw[16]="";
-	config_get("keyboard",kb,sizeof(kb));config_get("layout_switch",sw,sizeof(sw));
+	char kb[8]="",sw[16]="",st[8]="";
+	config_get("keyboard",kb,sizeof(kb));config_get("layout_switch",sw,sizeof(sw));config_get("sticky_keys",st,sizeof(st));
 	s->sym_shift=!strcmp(sw,"shift_sym");
+	s->sticky=strcmp(st,"off")!=0;
+	if(!s->sticky && s->keymap && (s->sticky_shift || s->sticky_fn)){s->sticky_shift=s->sticky_fn=0;sticky_apply(s);}
 	int k=0;
 	for(int i=0;i<(int)(sizeof(keyboards)/sizeof(*keyboards));i++){if(!strcmp(kb,keyboards[i].name)){k=i;}}
 	if(s->keymap && !strcmp(s->keyboard,keyboards[k].name)){return;}
@@ -273,7 +354,7 @@ void input_keymap(struct server *s){
 	}
 	fcntl(fd,F_ADD_SEALS,F_SEAL_SHRINK|F_SEAL_GROW|F_SEAL_WRITE|F_SEAL_SEAL);free(text);
 	if(s->keymap){close(s->keymap_fd);xkb_state_unref(s->keys);xkb_keymap_unref(s->keymap);}
-	s->keymap=map;s->keys=xkb_state_new(map);s->keymap_fd=fd;s->keymap_size=size;
+	s->keymap=map;s->keys=xkb_state_new(map);s->keymap_fd=fd;s->keymap_size=size;s->sticky_shift=s->sticky_fn=0;
 	snprintf(s->keyboard,sizeof(s->keyboard),"%s",keyboards[k].name);
 
 	uint32_t serial=wl_display_next_serial(s->display);struct input_resource *i;
@@ -285,17 +366,20 @@ void input_keymap(struct server *s){
 }
 
 void input_language(struct server *s,char *out,size_t n){
-	out[0]=0;
-	if(xkb_keymap_num_layouts(s->keymap)<2){return;}
-	const char *name=xkb_keymap_layout_get_name(s->keymap,xkb_state_serialize_layout(s->keys,XKB_STATE_LAYOUT_EFFECTIVE));
+	char lang[4]="";
+	const char *mode=s->sticky_fn ? "123" : s->sticky_shift==2 ? "ABC" : s->sticky_shift==1 ? "Abc" : "";
+	const char *name=xkb_keymap_num_layouts(s->keymap)>1 ? xkb_keymap_layout_get_name(s->keymap,xkb_state_serialize_layout(s->keys,XKB_STATE_LAYOUT_EFFECTIVE)) : NULL;
+
 	static const char *const codes[][2]={{"English","EN"},{"Russian","RU"},{"Finnish","FI"},{"Swedish","SV"}};
-	for(size_t i=0;name && i<sizeof(codes)/sizeof(*codes);i++){if(!strncmp(name,codes[i][0],strlen(codes[i][0]))){snprintf(out,n,"%s",codes[i][1]);return;}}
-	if(name){snprintf(out,n,"%.2s",name);}
+	for(size_t i=0;name && !lang[0] && i<sizeof(codes)/sizeof(*codes);i++){if(!strncmp(name,codes[i][0],strlen(codes[i][0]))){snprintf(lang,sizeof(lang),"%s",codes[i][1]);}}
+	if(name && !lang[0]){snprintf(lang,sizeof(lang),"%.2s",name);}
+	snprintf(out,n,"%s%s%s",lang,lang[0] && mode[0] ? " " : "",mode);
 }
 
 void input_init(struct server *s){
 	s->xkb=xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	input_keymap(s);
+	s->sym_hold=wl_event_loop_add_timer(s->loop,sym_hold,s);
 
 	wl_global_create(s->display,&wl_seat_interface,5,s,bind_seat);
 	if(s->input_fd>=0){
@@ -321,5 +405,6 @@ void input_init(struct server *s){
 void input_finish(struct server *s){
 	struct device *d,*tmp;
 	wl_list_for_each_safe(d,tmp,&s->devices,link){wl_event_source_remove(d->source);close(d->fd);wl_list_remove(&d->link);free(d);}
+	wl_event_source_remove(s->sym_hold);
 	close(s->keymap_fd);xkb_state_unref(s->keys);xkb_keymap_unref(s->keymap);xkb_context_unref(s->xkb);
 }
