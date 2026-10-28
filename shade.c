@@ -179,6 +179,32 @@ static int toast_timeout(void *data){
 	return 0;
 }
 
+void osd_show(struct server *s){
+	struct ui *u=s->ui;
+	u->osd_value=level_get(LEVEL_VOLUME);
+	spring_to(&u->osd,1);wl_event_source_timer_update(u->osd_hide,OSD_MS);
+	schedule_repaint(s,true);
+}
+
+static int osd_timeout(void *data){
+	struct server *s=data;
+	spring_to(&s->ui->osd,0);schedule_repaint(s,true);
+	return 0;
+}
+
+void osd_draw(struct ui *u,struct layer *dyn){
+	if(u->osd.x<=.01f){return;}
+	float w=fminf(screen_w-16,300),h=48,x=(screen_w-w)/2,y=STATUS+6-(1-u->osd.x)*(STATUS+12+h);
+	rect(dyn,x,y,w,h,h/2,rgb(0x333333,.97f),rgb(0x1a1a1a,.97f));
+	char buf[16];int v=u->osd_value<0 ? 0 : u->osd_value;
+	snprintf(buf,sizeof(buf),"%d%%",v);
+	icon(u,dyn,x+28,y+h/2,v ? I_VOLUME : I_VOLUME_OFF,26,white(1));
+	float tx=x+54,tw=w-54-58;
+	rect(dyn,tx,y+h/2-3,tw,6,3,white(.25f),white(.25f));
+	if(v){rect(dyn,tx,y+h/2-3,tw*v/100.f,6,3,rgb(0x3cb2ff,1),rgb(0x0b72c9,1));}
+	text(u,dyn,F_TEXT,x+w-18,y+30,buf,16,white(.9f),2);
+}
+
 bool toast_shown(struct ui *u){return is_open(&u->toast) && toast_note(u);}
 
 void open_shade(struct server *s,bool on){
@@ -215,10 +241,11 @@ void shade_draw_swipe(struct ui *u,struct layer *dyn){
 
 void shade_init(struct server *s){
 	s->ui->toast_hide=wl_event_loop_add_timer(s->loop,toast_timeout,s);
+	s->ui->osd_hide=wl_event_loop_add_timer(s->loop,osd_timeout,s);
 	notify_init(s);
 }
 
 void shade_finish(struct ui *u){
-	wl_event_source_remove(u->toast_hide);
+	wl_event_source_remove(u->toast_hide);wl_event_source_remove(u->osd_hide);
 	notify_finish();
 }

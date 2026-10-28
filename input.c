@@ -12,6 +12,7 @@
 #include <sys/ioctl.h>
 #include <linux/input.h>
 #include "yamashell.h"
+#include "config.h"
 
 struct device{
 	struct server *server;
@@ -64,6 +65,18 @@ void input_key(struct server *s,uint32_t time,uint32_t key,uint32_t state){
 	if(!state && n<s->npressed){s->pressed[n]=s->pressed[--s->npressed];}
 
 	xkb_state_update_key(s->keys,key+8,state ? XKB_KEY_DOWN : XKB_KEY_UP);
+	if(key==KEY_COMPOSE && !state && s->sym_grabbed){s->sym_grabbed=false;return;}
+	if(key==KEY_COMPOSE && state && xkb_keymap_num_layouts(s->keymap)>1 &&
+		(!s->sym_shift || xkb_state_mod_name_is_active(s->keys,XKB_MOD_NAME_SHIFT,XKB_STATE_MODS_EFFECTIVE))){
+		xkb_layout_index_t next=(xkb_state_serialize_layout(s->keys,XKB_STATE_LAYOUT_EFFECTIVE)+1)%xkb_keymap_num_layouts(s->keymap);
+		xkb_state_update_mask(s->keys,xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_DEPRESSED),xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_LATCHED),
+			xkb_state_serialize_mods(s->keys,XKB_STATE_MODS_LOCKED),0,0,next);
+		s->sym_grabbed=true;
+		uint32_t serial=wl_display_next_serial(s->display);struct input_resource *i;
+		wl_list_for_each(i,&s->keyboards,link){if(same_client(i->resource,s->focus)){modifiers(s,i->resource,serial);}}
+		ui_language(s);
+		return;
+	}
 	if(ui_key(s,key,state)){return;}
 	if(key==KEY_TAB && !state && s->tab_grabbed){s->tab_grabbed=false;return;}
 	if(state && key==KEY_TAB && xkb_state_mod_name_is_active(s->keys,XKB_MOD_NAME_ALT,XKB_STATE_MODS_EFFECTIVE)){
@@ -233,22 +246,56 @@ static int device_read(int fd,uint32_t mask,void *data){
 	return 0;
 }
 
-void input_init(struct server *s){
-	struct xkb_rule_names names={.layout="e6,e6",.variant=",ru",.options="grp:menu_toggle,lv3:ralt_switch"};
+static const struct{const char *name,*layout,*variant;}keyboards[]={{"ru","e6,e6",",ru"},{"en","e6","en"},{"fi","e6","fi"}};
+
+void input_keymap(struct server *s){
+	char kb[8]="",sw[16]="";
+	config_get("keyboard",kb,sizeof(kb));config_get("layout_switch",sw,sizeof(sw));
+	s->sym_shift=!strcmp(sw,"shift_sym");
+	int k=0;
+	for(int i=0;i<(int)(sizeof(keyboards)/sizeof(*keyboards));i++){if(!strcmp(kb,keyboards[i].name)){k=i;}}
+	if(s->keymap && !strcmp(s->keyboard,keyboards[k].name)){return;}
+	struct xkb_rule_names names={.layout=keyboards[k].layout,.variant=keyboards[k].variant,.options="lv3:ralt_switch"};
 #ifdef YAMASHELL_HOST
 	if(!getenv("XKB_CONFIG_EXTRA_PATH")){names.layout="us";names.variant=NULL;names.options=NULL;}
 #endif
+	struct xkb_keymap *map=xkb_keymap_new_from_names(s->xkb,&names,XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if(!map){names.layout="us";names.variant=NULL;names.options=NULL;map=xkb_keymap_new_from_names(s->xkb,&names,XKB_KEYMAP_COMPILE_NO_FLAGS);}
+	if(!map){fprintf(stderr,"yamashell: cannot compile keymap\n");if(!s->keymap){exit(1);}return;}
+
+	char *text=xkb_keymap_get_as_string(map,XKB_KEYMAP_FORMAT_TEXT_V1);
+	size_t size=text ? strlen(text)+1 : 0;
+	int fd=text ? memfd_create("yamashell-keymap",MFD_CLOEXEC|MFD_ALLOW_SEALING) : -1;
+	if(fd<0 || ftruncate(fd,size) || write(fd,text,size)!=(ssize_t)size){
+		perror("keymap");free(text);if(fd>=0){close(fd);}xkb_keymap_unref(map);
+		if(!s->keymap){exit(1);}
+		return;
+	}
+	fcntl(fd,F_ADD_SEALS,F_SEAL_SHRINK|F_SEAL_GROW|F_SEAL_WRITE|F_SEAL_SEAL);free(text);
+	if(s->keymap){close(s->keymap_fd);xkb_state_unref(s->keys);xkb_keymap_unref(s->keymap);}
+	s->keymap=map;s->keys=xkb_state_new(map);s->keymap_fd=fd;s->keymap_size=size;
+	snprintf(s->keyboard,sizeof(s->keyboard),"%s",keyboards[k].name);
+
+	uint32_t serial=wl_display_next_serial(s->display);struct input_resource *i;
+	wl_list_for_each(i,&s->keyboards,link){
+		wl_keyboard_send_keymap(i->resource,WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,s->keymap_fd,s->keymap_size);
+		if(same_client(i->resource,s->focus)){modifiers(s,i->resource,serial);}
+	}
+	ui_language(s);
+}
+
+void input_language(struct server *s,char *out,size_t n){
+	out[0]=0;
+	if(xkb_keymap_num_layouts(s->keymap)<2){return;}
+	const char *name=xkb_keymap_layout_get_name(s->keymap,xkb_state_serialize_layout(s->keys,XKB_STATE_LAYOUT_EFFECTIVE));
+	static const char *const codes[][2]={{"English","EN"},{"Russian","RU"},{"Finnish","FI"},{"Swedish","SV"}};
+	for(size_t i=0;name && i<sizeof(codes)/sizeof(*codes);i++){if(!strncmp(name,codes[i][0],strlen(codes[i][0]))){snprintf(out,n,"%s",codes[i][1]);return;}}
+	if(name){snprintf(out,n,"%.2s",name);}
+}
+
+void input_init(struct server *s){
 	s->xkb=xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	s->keymap=xkb_keymap_new_from_names(s->xkb,&names,XKB_KEYMAP_COMPILE_NO_FLAGS);
-
-	if(!s->keymap){names.layout="us";names.variant=NULL;names.options=NULL;s->keymap=xkb_keymap_new_from_names(s->xkb,&names,XKB_KEYMAP_COMPILE_NO_FLAGS);}
-	if(!s->keymap){fprintf(stderr,"yamashell: cannot compile keymap\n");exit(1);}
-	s->keys=xkb_state_new(s->keymap);
-
-	char *keymap=xkb_keymap_get_as_string(s->keymap,XKB_KEYMAP_FORMAT_TEXT_V1);
-	s->keymap_size=strlen(keymap)+1;s->keymap_fd=memfd_create("yamashell-keymap",MFD_CLOEXEC|MFD_ALLOW_SEALING);
-	if(s->keymap_fd<0 || ftruncate(s->keymap_fd,s->keymap_size) || write(s->keymap_fd,keymap,s->keymap_size)!=(ssize_t)s->keymap_size){perror("keymap");exit(1);}
-	fcntl(s->keymap_fd,F_ADD_SEALS,F_SEAL_SHRINK|F_SEAL_GROW|F_SEAL_WRITE|F_SEAL_SEAL);free(keymap);
+	input_keymap(s);
 
 	wl_global_create(s->display,&wl_seat_interface,5,s,bind_seat);
 	if(s->input_fd>=0){

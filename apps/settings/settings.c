@@ -33,7 +33,7 @@
 #define DEVICE 150
 #define INFOS 24
 
-enum{K_NONE,K_WALLS,K_APPS,K_ABOUT};
+enum{K_NONE,K_WALLS,K_APPS,K_ABOUT,K_KEYBOARD};
 struct section{const char *title,*sub;uint32_t icon;int level,kind;struct{const char *title;uint32_t icon;}rows[4];};
 static const struct section sections[]={
 	{"Connections","Wi-Fi, Bluetooth, SIM",0xe63e,-1,K_NONE,{{"Wi-Fi",0xe63e},{"Bluetooth",0xe1a7},{"SIM",0xe32b}}},
@@ -41,6 +41,7 @@ static const struct section sections[]={
 	{"Notifications","App notifications",0xe7f4,-1,K_NONE,{{0}}},
 	{"Display","Brightness",0xe1ac,LEVEL_BRIGHTNESS,K_NONE,{{0}}},
 	{"Wallpapers","Home screen picture",0xe1bc,-1,K_WALLS,{{0}}},
+	{"Keyboard","Layout, language switch",0xe312,-1,K_KEYBOARD,{{0}}},
 	{"Lock screen","Screen lock",0xe897,-1,K_NONE,{{0}}},
 	{"Security","Passwords, encryption",0xe32a,-1,K_NONE,{{0}}},
 	{"Apps","Installed apps",0xe5c3,-1,K_APPS,{{0}}},
@@ -48,8 +49,21 @@ static const struct section sections[]={
 };
 #define NSECTIONS (int)(sizeof(sections)/sizeof(*sections))
 
+static const struct{const char *conf,*title,*sub;bool two;}kbds[]={
+	{"ru","Russian","Cyrillic and Latin",true},{"en","English","International",false},{"fi","Finnish / Swedish","Latin with Ö Ä Å",false},
+};
+static const struct{const char *conf,*title;}switches[]={{"sym","Sym"},{"shift_sym","Shift + Sym"}};
+#define NKBDS (int)(sizeof(kbds)/sizeof(*kbds))
+#define NSWITCHES (int)(sizeof(switches)/sizeof(*switches))
+static int kbd_pick,switch_pick,is_e6=-1;
+
+static bool section_shown(int i){
+	if(is_e6<0){is_e6=!strcmp(sysinfo_device(),"e6");}
+	return sections[i].kind!=K_KEYBOARD || is_e6;
+}
+
 /* what a touch or OK hits on the screen in front, rebuilt with every frame */
-enum{H_OPEN,H_BACK,H_SLIDER,H_WALL,H_APP,H_LAUNCH};
+enum{H_OPEN,H_BACK,H_SLIDER,H_WALL,H_APP,H_LAUNCH,H_CHOICE};
 struct hit{int act,arg;float x,y,w,h;};
 enum{G_NONE,G_TAP,G_SCROLL,G_SLIDER};
 
@@ -103,14 +117,18 @@ static void separator(float x,float y,float right){fill(x,y,right-x-16,1,0,C_WHI
 
 static void draw_list(float ox,bool front){
 	float y=TOP-list.x;
-	list.max=fmaxf(0,TOP+NSECTIONS*ROW+12-app_h);
+	int n=0;
+	for(int i=0;i<NSECTIONS;i++){n+=section_shown(i);}
+	list.max=fmaxf(0,TOP+n*ROW+12-app_h);
 	text(F_LIGHT,ox+20,y-20,"Settings",34,C_WHITE,1,0);
-	for(int i=0;i<NSECTIONS;i++,y+=ROW){
+	for(int i=0;i<NSECTIONS;i++){
 		const struct section *s=&sections[i];
+		if(!section_shown(i)){continue;}
 		if(front && i==pressed){fill(ox+6,y+2,app_w-12,ROW-4,10,0x144c80,0x08335c,.35f*press.x);}
 		if(front){hit(H_OPEN,i,ox,y,app_w,ROW);}
 		row(ox,y,s->icon,s->title,s->sub,1);
 		if(i<NSECTIONS-1){separator(ox+76,y+ROW-1,ox+app_w);}
+		y+=ROW;
 	}
 }
 
@@ -191,6 +209,37 @@ static void draw_walls(float ox,float y,bool front){
 		}
 	}
 	pagel.max=fmaxf(0,y+pagel.x+(nwalls+wall_cols()-1)/wall_cols()*(thumb_h+GAP)+4-app_h);
+}
+
+static void choice(float ox,float y,float h,int arg,const char *title,const char *sub,bool on,float a,bool front){
+	if(front && a>=1){
+		if(arg==pressed){fill(ox+6,y+2,app_w-12,h-4,10,0x144c80,0x08335c,.35f*press.x);}
+		hit(H_CHOICE,arg,ox,y,app_w,h);
+	}
+	text(F_TEXT,ox+20,sub ? y+31 : y+h/2+7,title,19,C_WHITE,a,0);
+	if(sub){text(F_TEXT,ox+20,y+54,sub,15,C_WHITE,.65f*a,0);}
+	float cx=ox+app_w-34,cy=y+h/2;
+	if(on){fill(cx-13,cy-13,26,26,13,C_ACCENT,C_ACCENT2,a);icon(cx,cy,I_CHECK,18,C_WHITE,a);}
+	else{fill(cx-12,cy-12,24,24,12,C_WHITE,C_WHITE,.5f*a);fill(cx-10,cy-10,20,20,10,C_TILE2,C_TILE2,a);}
+}
+
+static void draw_keyboard(float ox,float y,bool front){
+	text(F_TEXT,ox+20,y+6,"Keyboard version",15,C_WHITE,.65f,0);
+	y+=18;
+	for(int i=0;i<NKBDS;i++,y+=ROW){
+		choice(ox,y,ROW,i,kbds[i].title,kbds[i].sub,i==kbd_pick,1,front);
+		if(i<NKBDS-1){separator(ox+20,y+ROW-1,ox+app_w);}
+	}
+	float a=kbds[kbd_pick].two ? 1 : .42f;
+	y+=20;
+	text(F_TEXT,ox+20,y+6,"Switch language with",15,C_WHITE,.65f,0);
+	y+=18;
+	for(int i=0;i<NSWITCHES;i++,y+=ROW-16){
+		choice(ox,y,ROW-16,8+i,switches[i].title,NULL,i==switch_pick,a,front);
+		if(i<NSWITCHES-1){separator(ox+20,y+ROW-17,ox+app_w);}
+	}
+	if(a<1){text(F_TEXT,ox+20,y+22,"This keyboard has one language",15,C_WHITE,.65f,0);y+=30;}
+	pagel.max=fmaxf(0,y+pagel.x+12-app_h);
 }
 
 static void header(float ox,float top,const char *title,bool front){
@@ -278,6 +327,7 @@ static void draw_page(float ox,bool front){
 	if(s->kind==K_WALLS){draw_walls(ox,y,front);return;}
 	if(s->kind==K_APPS){draw_apps(ox,y,front);return;}
 	if(s->kind==K_ABOUT){draw_about(ox,y);return;}
+	if(s->kind==K_KEYBOARD){draw_keyboard(ox,y,front);return;}
 	if(s->level>=0){
 		slider(ox,y,s->level,s->icon,front);
 		y+=SLIDER_H;
@@ -362,6 +412,14 @@ static void open_page(int i){
 	}
 
 	if(sections[i].level>=0){int k=sections[i].level,v=levels[k]=level_get(k);shown[k]=(struct spring){v,0,v};}
+	if(sections[i].kind==K_KEYBOARD){
+		char v[16]="";
+		kbd_pick=switch_pick=0;
+		config_get("keyboard",v,sizeof(v));
+		for(int k=0;k<NKBDS;k++){if(!strcmp(v,kbds[k].conf)){kbd_pick=k;}}
+		v[0]=0;config_get("layout_switch",v,sizeof(v));
+		for(int k=0;k<NSWITCHES;k++){if(!strcmp(v,switches[k].conf)){switch_pick=k;}}
+	}
 }
 
 static void open_detail(int i){
@@ -399,6 +457,8 @@ static void activate(struct hit *h){
 	else if(h->act==H_WALL && h->arg!=picked){picked=h->arg;config_set("wallpaper",walls[picked].path);pick=(struct spring){0,0,1};}
 	else if(h->act==H_APP){open_detail(h->arg);}
 	else if(h->act==H_LAUNCH){launch(apps[detail].exec);}
+	else if(h->act==H_CHOICE && h->arg<8){kbd_pick=h->arg;config_set("keyboard",kbds[kbd_pick].conf);}
+	else if(h->act==H_CHOICE){switch_pick=h->arg-8;config_set("layout_switch",switches[switch_pick].conf);}
 	else if(h->act==H_BACK){back();}
 }
 
@@ -409,7 +469,7 @@ static void move_focus(int dir){
 	if(i<0 || i>=nhits){return;}
 	focus=i;
 	struct hit *h=&hits[i];
-	if(h->act==H_OPEN || h->act==H_WALL || h->act==H_APP){
+	if(h->act==H_OPEN || h->act==H_WALL || h->act==H_APP || h->act==H_CHOICE){
 		struct scroll *sc=scroller();
 		if(h->y<0){sc->x+=h->y-(i==0 || (h->act==H_WALL && h->arg<wall_cols()) || (h->act==H_APP && h->arg==0) ? TOP+18 : 0);}
 		else if(h->y+h->h>app_h){sc->x+=h->y+h->h-app_h;}
@@ -445,7 +505,7 @@ void app_touch(int state,double x,double y){
 		down_x=x;down_y=y;last_y=y;vel=0;move_time=app_ms();keys=false;
 		gesture=h && h->act==H_SLIDER ? G_SLIDER : G_TAP;
 		if(gesture==G_SLIDER){focus=(int)(h-hits);set_slider(h,x);spring_to(&knob,1);}
-		else if(h && (h->act==H_OPEN || h->act==H_WALL || h->act==H_APP)){pressed=h->arg;press=(struct spring){1,0,1};}
+		else if(h && (h->act==H_OPEN || h->act==H_WALL || h->act==H_APP || h->act==H_CHOICE)){pressed=h->arg;press=(struct spring){1,0,1};}
 		scroller()->v=0;
 		return;
 	}

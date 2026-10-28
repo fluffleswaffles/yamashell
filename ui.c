@@ -157,6 +157,7 @@ static int conf_changed(int fd,uint32_t mask,void *data){
 	while(read(fd,buf,sizeof(buf))>0){}
 	config_get("wallpaper",w,sizeof(w));
 	if(strcmp(w,u->wall_conf)){snprintf(u->wall_conf,sizeof(u->wall_conf),"%s",w);wallpaper(u);schedule_repaint(s,true);}
+	input_keymap(s);
 	return 0;
 }
 
@@ -279,9 +280,20 @@ static void move_focus(struct ui *u,int dx,int dy,struct server *s){
 	schedule_repaint(s,true);
 }
 
+void ui_language(struct server *s){
+	struct ui *u=s->ui;
+	if(!u){return;}
+	input_language(s,u->lang,sizeof(u->lang));
+	u->dirty=true;schedule_repaint(s,true);
+}
+
 bool ui_key(struct server *s,uint32_t key,uint32_t state){
 	struct ui *u=s->ui;
 	if(!u){return false;}
+	if(key==KEY_VOLUMEUP || key==KEY_VOLUMEDOWN){
+		if(state){level_set(LEVEL_VOLUME,level_get(LEVEL_VOLUME)+(key==KEY_VOLUMEUP ? 10 : -10));osd_show(s);u->dirty=true;}
+		return true;
+	}
 	if(key==KEY_HOMEPAGE || key==KEY_MESSENGER || key==KEY_HANGUP_PHONE){
 		if(state){if(!u->held_key){u->held_key=key;wl_event_source_timer_update(u->hold,HOLD);}return true;}
 		if(u->held_key!=(int)key){return true;} /* the long press already fired */
@@ -489,7 +501,7 @@ bool ui_animating(struct server *s){
 	if(!u){return false;}
 	bool sheet=u->gesture!=G_SHADE_OPEN && u->gesture!=G_SHADE && u->gesture!=G_MENU_OPEN && u->gesture!=G_MENU;
 	/* new glyphs drawn this frame reach the atlas on the next one */
-	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0 || spring_moving(&u->lift) || spring_moving(&u->gap) || spring_moving(&u->dim);
+	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0 || spring_moving(&u->lift) || spring_moving(&u->gap) || spring_moving(&u->dim) || spring_moving(&u->osd);
 }
 /* before the windows: wallpaper and home; returns whether app windows are drawn */
 bool ui_draw_under(struct server *s){
@@ -506,11 +518,14 @@ bool ui_draw_under(struct server *s){
 	if(u->gesture!=G_TASKS){spring_step(&u->task_pos,dt,400);}
 	spring_step(&u->app,dt,300);
 	spring_step(&u->toast,dt,300);
+	spring_step(&u->osd,dt,300);
 	if(u->gesture!=G_MENU_SCROLL){scroll_step(&u->apps_scroll,dt);}
 	if(u->gesture!=G_SHADE_SCROLL){scroll_step(&u->notes_scroll,dt);}
 	shade_step(u,dt);
 	tasks_step(s,dt);
 	if(!u->home && !top_window(s)){u->home=true;spring_to(&u->app,0);u->app.x=0;u->app.v=0;input_focus(s,NULL);}
+	bool lang=!u->home && u->lang[0];
+	if(lang!=u->lang_shown){u->lang_shown=lang;u->dirty=true;}
 	if(u->dirty){build(u);}
 	s->zoom=u->app.x>0 ? u->app.x : 0;s->zoom_x=u->zoom_x;s->zoom_y=u->zoom_y;
 	/* a settled app covers the screen: no wallpaper or home behind it */
@@ -570,6 +585,7 @@ void ui_draw_over(struct server *s){
 	}
 	draw_pull(u,dyn);
 	shade_draw_swipe(u,dyn);
+	osd_draw(u,dyn);
 	if(u->dirty_y1>u->dirty_y0){u->dirty=true;}
 	draw_dynamic(u,dyn);
 	end(s);
@@ -648,6 +664,7 @@ void ui_init(struct server *s){
 	load_apps(u);
 	u->home=true;u->focus=-1;u->fly_i=-1;
 	s->ui=u;s->inset=STATUS;
+	input_language(s,u->lang,sizeof(u->lang));
 	status_init(s);
 	/* items exist before the first frame, a tap may come first */
 	build(u);

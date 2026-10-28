@@ -116,6 +116,13 @@ void status_bar(struct ui *u,const char *hm){
 		snprintf(buf,sizeof(buf),"%d%%",st.pct);
 		rx-=text(u,bar,F_TEXT,rx,21,buf,16,white(.9f),2)+14;
 		icon(u,bar,rx+4,STATUS/2.f,st.charging ? I_CHARGING : I_BATTERY,21,white(.9f));
+		rx-=14;
+	}
+	if(u->lang_shown){
+		float w=text(u,bar,F_TEXT,0,-100,u->lang,13,white(0),0)+12;
+		rect(bar,rx-w,6,w,STATUS-12,4,white(.9f),white(.9f));
+		rect(bar,rx-w+1.5f,7.5f,w-3,STATUS-15,2.5f,(struct col){0,0,0,1},(struct col){0,0,0,1});
+		text(u,bar,F_TEXT,rx-w/2,STATUS/2.f+5,u->lang,13,white(.9f),1);
 	}
 }
 

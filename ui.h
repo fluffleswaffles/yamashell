@@ -26,6 +26,7 @@
 #define ASSETS "/usr/share/yamashell/"
 #define TOAST_H 64
 #define TOAST_MS 4000
+#define OSD_MS 1500 /* the volume plate */
 #define MAX_TASKS 16
 
 /* L_APPS and L_NOTES scroll; their items belong to the app menu and the shade */
@@ -67,7 +68,9 @@ struct ui{
 	int focus,gesture,last_minute,held_key,uevent_fd,udc_fd;
 	double x0,y0,x,y,vel;
 	uint32_t anim_time,move_time;
-	struct wl_event_source *clock,*hold,*press,*child,*poll,*uevent,*udc,*toast_hide,*conf;
+	struct wl_event_source *clock,*hold,*press,*child,*poll,*uevent,*udc,*toast_hide,*conf,*osd_hide;
+	char lang[4];bool lang_shown;
+	struct spring osd;int osd_value;
 	char wall_conf[300]; /* the config wallpaper line the texture was made from */
 };
 
@@ -83,6 +86,7 @@ extern struct toggle toggles[];
 #define I_TASKS 0xe8eb
 #define I_BRIGHTNESS 0xe1ac
 #define I_VOLUME 0xe050
+#define I_VOLUME_OFF 0xe04f
 
 static inline struct col rgb(uint32_t c,float a){return (struct col){(c>>16&255)/255.f*a,(c>>8&255)/255.f*a,(c&255)/255.f*a,a};}
 static inline struct col white(float a){return (struct col){a,a,a,a};}
@@ -121,6 +125,8 @@ void swipe_start(struct ui *u,uint32_t id);
 void swipe_away(struct ui *u,float dir);
 void shade_step(struct ui *u,float dt);
 void shade_draw_swipe(struct ui *u,struct layer *dyn);
+void osd_show(struct server *s);
+void osd_draw(struct ui *u,struct layer *dyn);
 void shade_init(struct server *s);
 void shade_finish(struct ui *u);
 /* tasks.c */
