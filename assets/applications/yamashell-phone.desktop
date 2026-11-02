@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Phone
+Exec=yamashell-phone
+Icon=yamashell-phone
+Categories=Telephony;

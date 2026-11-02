@@ -9,11 +9,13 @@
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <linux/netlink.h>
+#include <time.h>
+#include <signal.h>
 #include "ui.h"
 
 /* system state: battery, charger, usb shell, card */
 struct status read_status(void){
-	struct status st={-1,false,false,false,false};
+	struct status st={.pct=-1,.signal=-1};
 	char buf[32]={0},path[300];
 	FILE *f=fopen("/sys/class/power_supply/battery/capacity","r");
 	if(f){if(fscanf(f,"%d",&st.pct)!=1){st.pct=-1;}fclose(f);}
@@ -34,6 +36,15 @@ struct status read_status(void){
 	}
 	if(d){closedir(d);}
 	st.card=access("/dev/mmcblk0",F_OK)==0;
+	f=fopen("/run/rapuyama-modem/signal","r");
+	if(f){
+		unsigned long long stamp;int value,rat=0;struct timespec now;clock_gettime(CLOCK_MONOTONIC,&now);
+		int fields=fscanf(f,"%llu %d %d",&stamp,&value,&rat);
+		if(fields>=2 && value>=0 && value<=100 && (unsigned long long)now.tv_sec>=stamp && (unsigned long long)now.tv_sec-stamp<30){
+			st.signal=value;if(fields==3 && (rat==2 || rat==3)){st.rat=rat;}
+		}
+		fclose(f);
+	}
 	return st;
 }
 
@@ -46,7 +57,7 @@ static void refresh_status(struct server *s){
 static int status_poll(void *data){
 	struct server *s=data;
 	refresh_status(s);
-	wl_event_source_timer_update(s->ui->poll,10000);
+	wl_event_source_timer_update(s->ui->poll,2000);
 	return 0;
 }
 
@@ -112,6 +123,12 @@ void status_bar(struct ui *u,const char *hm){
 		shown[nshown++]=k;
 	}
 	float rx=screen_w-12-text(u,bar,F_TEXT,screen_w-12,21,hm,17,white(1),2)-12;
+	for(int i=0;i<4;i++){
+		float h=4+i*3;struct col c=white(st.signal>=0 && st.signal>i*25 ? .95f : .22f);
+		rect(bar,rx-25+i*5,STATUS/2.f+7-h,3,h,0,c,c);
+	}
+	rx-=30;
+	if(st.rat){snprintf(buf,sizeof(buf),"%dG",st.rat);rx-=text(u,bar,F_TEXT,rx,21,buf,14,white(.9f),2)+8;}
 	if(st.pct>=0){
 		snprintf(buf,sizeof(buf),"%d%%",st.pct);
 		rx-=text(u,bar,F_TEXT,rx,21,buf,16,white(.9f),2)+14;
@@ -137,6 +154,9 @@ void status_init(struct server *s){
 }
 
 void status_finish(struct ui *u){
+	if(u->call_poll){wl_event_source_remove(u->call_poll);}
+	if(u->call_pid>1){kill(-u->call_pid,SIGTERM);}
+	sound_stop(u->ring_pid);
 	wl_event_source_remove(u->poll);
 	if(u->uevent){wl_event_source_remove(u->uevent);}
 	if(u->uevent_fd>=0){close(u->uevent_fd);}

@@ -110,6 +110,7 @@ static int button_at(double x,double y){
 
 bool modal_touch(int state,double x,double y){
 	if(!m.open){return false;}
+	if(state==T_CANCEL){m.pressed=-1;m.outside=false;spring_to(&m.press,0);return true;}
 	if(state==T_DOWN){
 		m.keys=false;m.tx=x;m.ty=y;
 		m.pressed=button_at(x,y);
@@ -131,7 +132,7 @@ bool modal_key(uint32_t key){
 	bool first=!m.keys;
 	m.keys=true;
 	if(key==KEY_ESC || key==KEY_BACKSPACE){finish(-1);}
-	else if(first){app_redraw();}
+	else if(first && key!=KEY_LEFT && key!=KEY_RIGHT && key!=KEY_UP && key!=KEY_DOWN){app_redraw();}
 	else if((key==KEY_LEFT || key==KEY_UP) && m.focus>0){m.focus--;}
 	else if((key==KEY_RIGHT || key==KEY_DOWN) && m.focus<m.n-1){m.focus++;}
 	else if(key==KEY_OK || key==KEY_ENTER){finish(m.focus);}

@@ -6,6 +6,7 @@
 # notifications go to a bus of its own, the desktop's one already has a notification daemon
 # usage: preview.py [--size 360x640]
 import os
+import argparse
 import struct
 import subprocess
 import sys
@@ -22,11 +23,11 @@ ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_MT_POSITION_X, ABS_MT_POSITION_Y = 0x2f, 0x
 # tk keysym -> E6 keys that a pc keyboard does not have
 PHONE = {'F1': 172, 'F2': 0x1ae, 'F3': 0x1be}
 
-size = '640x480'
-if len(sys.argv) == 3 and sys.argv[1] == '--size':
-	size = sys.argv[2]
-elif len(sys.argv) != 1:
-	sys.exit('usage: preview.py [--size 360x640]')
+parser = argparse.ArgumentParser()
+parser.add_argument('--size', default='640x480')
+parser.add_argument('--app', choices=('phone', 'messages', 'settings'))
+options = parser.parse_args()
+size = options.size
 width, height = map(int, size.split('x'))
 
 os.makedirs(OUT, exist_ok=True)
@@ -50,9 +51,19 @@ env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=BUS, YAMASHELL_SIZE=size, XDG_DA
 	YAMASHELL_FONT=os.path.join(assets, 'Ubuntu-Regular.ttf'), YAMASHELL_FONT_LIGHT=os.path.join(assets, 'Ubuntu-Light.ttf'),
 	YAMASHELL_ICONS=os.path.join(assets, 'MaterialIcons-Regular.ttf'), YAMASHELL_WALLPAPER=os.path.join(assets, 'wallpaper.jpg'))
 read_end, write_end = os.pipe()
-shell = subprocess.Popen([os.path.join(OUT, 'build', 'yamashell'), '--headless', '--ui', '--start-terminal', '--socket', SOCKET,
+shell = subprocess.Popen([os.path.join(OUT, 'build', 'yamashell'), '--headless', '--ui', '--socket', SOCKET,
 	'--input-fd', str(read_end), '--capture', FRAME], env=env, pass_fds=[read_end])
 os.close(read_end)
+app = None
+if options.app:
+	path = os.path.join(env.get('XDG_RUNTIME_DIR', '/run/user/' + str(os.getuid())), SOCKET)
+	for _ in range(100):
+		if os.path.exists(path) or shell.poll() is not None:
+			break
+		time.sleep(.05)
+	if shell.poll() is None:
+		app = subprocess.Popen([os.path.join(OUT, 'build', 'yamashell-' + options.app)],
+			env=dict(env, WAYLAND_DISPLAY=SOCKET))
 
 def send(*events):
 	try:
@@ -129,6 +140,9 @@ try:
 except KeyboardInterrupt:
 	pass
 finally:
+	if app is not None and app.poll() is None:
+		app.terminate()
+		app.wait()
 	shell.terminate()
 	shell.wait()
 	bus.terminate()

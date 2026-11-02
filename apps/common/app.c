@@ -10,8 +10,12 @@
 #include <string.h>
 #include <math.h>
 #include <poll.h>
+#include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <linux/input.h>
+#include <sys/mman.h>
+#include <xkbcommon/xkbcommon.h>
 #include <wayland-client.h>
 #include <wayland-egl.h>
 #include <EGL/egl.h>
@@ -39,6 +43,9 @@ static struct{
 	struct wl_compositor *compositor;
 	struct xdg_wm_base *wm;
 	struct wl_seat *seat;
+	struct xkb_context *xkb;
+	struct xkb_keymap *keymap;
+	struct xkb_state *keys;
 	struct wl_surface *surface;
 	struct wl_egl_window *win;
 	EGLDisplay egl;EGLSurface es;EGLContext ctx;
@@ -48,14 +55,19 @@ static struct{
 	struct tex tex[TEXTURES];int ntex;
 	struct vtx v[QUADS*4];int nq,first;
 	int pw,ph,touch;uint32_t last;
-	bool configured,quit,redraw,moving,resized;
+	bool configured,quit,redraw,moving,resized,focused,caret;
+	uint32_t edited;
 }a={.pw=640,.ph=450,.touch=-1};
 /* clip in physical pixels */
 static float cx0,cy0,cx1,cy1;
+static volatile sig_atomic_t stopping;
+static void stop(int signal){(void)signal;stopping=1;}
 
 uint32_t app_ms(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (uint32_t)(t.tv_sec*1000+t.tv_nsec/1000000);}
 void app_redraw(void){a.redraw=true;}
+bool app_caret(void){a.caret=true;return a.focused && (app_ms()-a.edited)%1000<500 && !modal_shown();}
 void app_quit(void){a.quit=true;}
+__attribute__((weak)) void app_text(const char *utf8){(void)utf8;}
 
 /* drawing */
 /* alacritty's way, proven on the VC: the quads since the last draw go once into the vbo
@@ -80,10 +92,15 @@ static void bind(GLuint id,int w,int h){
 	a.bound=id;
 }
 
+static float offset_x,offset_y;
+static float view_x0,view_y0,view_x1=100000,view_y1=100000;
+void app_offset(float x,float y){offset_x=x*app_scale;offset_y=y*app_scale;}
+void app_view(float x0,float y0,float x1,float y1){view_x0=x0*app_scale;view_y0=y0*app_scale;view_x1=x1*app_scale;view_y1=y1*app_scale;}
+
 void clip(float x0,float y0,float x1,float y1){
 	flush();
-	cx0=fmaxf(floorf(x0*app_scale),0);cy0=fmaxf(floorf(y0*app_scale),0);
-	cx1=fminf(ceilf(x1*app_scale),a.pw);cy1=fminf(ceilf(y1*app_scale),a.ph);
+	cx0=fmaxf(floorf(x0*app_scale+offset_x),fmaxf(0,view_x0));cy0=fmaxf(floorf(y0*app_scale+offset_y),fmaxf(0,view_y0));
+	cx1=fminf(ceilf(x1*app_scale+offset_x),fminf(a.pw,view_x1));cy1=fminf(ceilf(y1*app_scale+offset_y),fminf(a.ph,view_y1));
 	/* gl y is up */
 	glScissor((int)cx0,(int)(a.ph-cy1),(int)fmaxf(cx1-cx0,0),(int)fmaxf(cy1-cy0,0));
 }
@@ -92,6 +109,7 @@ static int16_t q4(float v){return (int16_t)lroundf(v*4);}
 
 /* physical x, y, w, h; u0..v1 the box (mode 0) or texels (modes 1, 2); colours premultiplied */
 static void quad(float x,float y,float w,float h,float u0,float v0,float u1,float v1,const uint8_t top[4],const uint8_t bottom[4],float rad,int mode){
+	x+=offset_x;y+=offset_y;
 	if(w<=0 || h<=0 || x>=cx1 || y>=cy1 || x+w<=cx0 || y+h<=cy0){return;}
 	/* shortcut: a frame past QUADS is cut off, more room if an app ever draws that much */
 	if(a.nq==QUADS){return;}
@@ -321,7 +339,7 @@ static bool frame(void){
 	/* a cleared tile isn't loaded back from memory first */
 	glDisable(GL_SCISSOR_TEST);glClear(GL_COLOR_BUFFER_BIT);glEnable(GL_SCISSOR_TEST);
 	clip(0,0,app_w,app_h);
-	app_draw();
+	a.caret=false;app_draw();
 	modal_draw();
 	flush();
 	a.nq=a.first=0;
@@ -331,17 +349,53 @@ static bool frame(void){
 /* input */
 static void key(void *data,struct wl_keyboard *k,uint32_t serial,uint32_t time,uint32_t code,uint32_t state){
 	(void)data;(void)k;(void)serial;(void)time;
-	if(state==WL_KEYBOARD_KEY_STATE_PRESSED){if(!modal_key(code)){app_key(code);}a.redraw=true;}
+	if(state!=WL_KEYBOARD_KEY_STATE_PRESSED){return;}
+	a.edited=app_ms();
+	char value[64];
+	int n=a.keys ? xkb_state_key_get_utf8(a.keys,code+8,value,sizeof(value)) : 0;
+	bool printable=n>0 && n<(int)sizeof(value) && (unsigned char)value[0]>=32;
+	if(code==KEY_ESC && printable){
+		if(!modal_shown()){app_text(value);}
+		a.redraw=true;return;
+	}
+	if(!modal_key(code)){
+		app_key(code);
+		if(printable && !modal_shown()){app_text(value);}
+	}
+	a.redraw=true;
 }
-static void keymap(void *data,struct wl_keyboard *k,uint32_t format,int32_t fd,uint32_t size){(void)data;(void)k;(void)format;(void)size;close(fd);}
+static void keymap(void *data,struct wl_keyboard *k,uint32_t format,int32_t fd,uint32_t size){
+	(void)data;(void)k;
+	if(format!=WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 || !size || size>1024*1024){close(fd);return;}
+	char *map=mmap(NULL,size,PROT_READ,MAP_PRIVATE,fd,0);
+	close(fd);
+	if(map==MAP_FAILED){return;}
+	if(!a.xkb){a.xkb=xkb_context_new(XKB_CONTEXT_NO_FLAGS);}
+	struct xkb_keymap *next=a.xkb && map[size-1]==0 ? xkb_keymap_new_from_string(a.xkb,map,XKB_KEYMAP_FORMAT_TEXT_V1,XKB_KEYMAP_COMPILE_NO_FLAGS) : NULL;
+	munmap(map,size);
+	if(!next){return;}
+	struct xkb_state *keys=xkb_state_new(next);
+	if(!keys){xkb_keymap_unref(next);return;}
+	xkb_state_unref(a.keys);xkb_keymap_unref(a.keymap);
+	a.keymap=next;a.keys=keys;
+}
 /* app may have changed meanwhile */
-static void enter(void *data,struct wl_keyboard *k,uint32_t serial,struct wl_surface *v,struct wl_array *keys){(void)data;(void)k;(void)serial;(void)v;(void)keys;a.redraw=true;}
-static void leave(void *data,struct wl_keyboard *k,uint32_t serial,struct wl_surface *v){(void)data;(void)k;(void)serial;(void)v;}
-static void mods(void *data,struct wl_keyboard *k,uint32_t serial,uint32_t d,uint32_t l,uint32_t lk,uint32_t g){(void)data;(void)k;(void)serial;(void)d;(void)l;(void)lk;(void)g;}
+static void enter(void *data,struct wl_keyboard *k,uint32_t serial,struct wl_surface *v,struct wl_array *keys){(void)data;(void)k;(void)serial;(void)v;(void)keys;a.focused=true;a.edited=app_ms();a.redraw=true;}
+static void leave(void *data,struct wl_keyboard *k,uint32_t serial,struct wl_surface *v){(void)data;(void)k;(void)serial;(void)v;a.focused=false;a.redraw=true;}
+static void mods(void *data,struct wl_keyboard *k,uint32_t serial,uint32_t d,uint32_t l,uint32_t lk,uint32_t g){
+	(void)data;(void)k;(void)serial;
+	if(a.keys){xkb_state_update_mask(a.keys,d,l,lk,0,0,g);}
+}
 static void repeat(void *data,struct wl_keyboard *k,int32_t rate,int32_t delay){(void)data;(void)k;(void)rate;(void)delay;}
 static const struct wl_keyboard_listener keyboard_listener={.keymap=keymap,.enter=enter,.leave=leave,.key=key,.modifiers=mods,.repeat_info=repeat};
 
-static void touch(int state,double x,double y){if(!modal_touch(state,x,y)){app_touch(state,x,y);}}
+static double touch_x,touch_y;
+static void touch(int state,double x,double y){
+	if(state==T_DOWN){a.edited=app_ms();}
+	if(state!=T_UP){touch_x=x;touch_y=y;}
+	else if(x<0){x=touch_x;y=touch_y;}
+	if(!modal_touch(state,x,y)){app_touch(state,x,y);}
+}
 
 static void touch_down(void *data,struct wl_touch *t,uint32_t serial,uint32_t time,struct wl_surface *v,int32_t id,wl_fixed_t x,wl_fixed_t y){
 	(void)data;(void)t;(void)serial;(void)time;(void)v;
@@ -359,7 +413,7 @@ static void touch_up(void *data,struct wl_touch *t,uint32_t serial,uint32_t time
 }
 
 static void touch_frame(void *data,struct wl_touch *t){(void)data;(void)t;}
-static void touch_cancel(void *data,struct wl_touch *t){(void)data;(void)t;if(a.touch>=0){a.touch=-1;touch(T_UP,-1,-1);a.redraw=true;}}
+static void touch_cancel(void *data,struct wl_touch *t){(void)data;(void)t;if(a.touch>=0){a.touch=-1;touch(T_CANCEL,0,0);a.redraw=true;}}
 static const struct wl_touch_listener touch_listener={.down=touch_down,.up=touch_up,.motion=touch_motion,.frame=touch_frame,.cancel=touch_cancel};
 
 static void capabilities(void *data,struct wl_seat *seat,uint32_t caps){
@@ -426,6 +480,8 @@ static void pump(void){
 }
 
 int app_run(const char *title,const char *id){
+	struct sigaction action={.sa_handler=stop};sigemptyset(&action.sa_mask);
+	sigaction(SIGTERM,&action,NULL);sigaction(SIGINT,&action,NULL);
 	a.display=wl_display_connect(NULL);
 	if(!a.display){fprintf(stderr,"%s: no wayland display\n",id);return 1;}
 	struct wl_registry *registry=wl_display_get_registry(a.display);
@@ -446,15 +502,23 @@ int app_run(const char *title,const char *id){
 	xdg_toplevel_set_title(top,title);
 	xdg_toplevel_set_app_id(top,id);
 	wl_surface_commit(a.surface);
-	while(!a.configured && wl_display_dispatch(a.display)>=0){}
+	while(!a.configured && !stopping && wl_display_dispatch(a.display)>=0){}
 	int ret=a.configured && egl_init(id) ? 0 : 1;
 	/* the swap waits for the compositor's frame callback, that paces the animation */
-	while(!ret && !a.quit){
+	while(!ret && !a.quit && !stopping){
 		if(a.redraw || a.moving){
 			pump();
 			if(!frame()){fprintf(stderr,"%s: swap failed %#x\n",id,eglGetError());ret=1;}
 		}
-		else if(wl_display_dispatch(a.display)<0){break;}
+		else{
+			struct pollfd pending={wl_display_get_fd(a.display),POLLIN,0};
+			wl_display_flush(a.display);
+			bool blink=a.caret && a.focused && !modal_shown();
+			int delay=blink ? 500-(app_ms()-a.edited)%500 : 1000;
+			int ready=poll(&pending,1,delay);
+			if(ready>0){if(wl_display_dispatch(a.display)<0){break;}}
+			else if(!ready){a.redraw=app_step(delay/1000.f) || blink;}
+		}
 	}
 	if(a.egl!=EGL_NO_DISPLAY){
 		while(a.ntex){app_forget(a.tex[0].px);}
@@ -466,6 +530,7 @@ int app_run(const char *title,const char *id){
 	if(a.win){wl_egl_window_destroy(a.win);}
 	xdg_toplevel_destroy(top);xdg_surface_destroy(xdg);wl_surface_destroy(a.surface);
 	wl_display_disconnect(a.display);
+	xkb_state_unref(a.keys);xkb_keymap_unref(a.keymap);xkb_context_unref(a.xkb);
 	for(int i=0;i<F_COUNT;i++){if(a.face[i]){FT_Done_Face(a.face[i]);}}
 	if(a.ft){FT_Done_FreeType(a.ft);}
 	return ret;

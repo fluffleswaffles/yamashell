@@ -18,7 +18,7 @@
 #define C_TRACK 0x484848
 #define C_BUBBLE 0x1a1a1a
 enum{F_TEXT,F_LIGHT,F_ICON,F_COUNT};
-enum{T_DOWN,T_MOVE,T_UP};
+enum{T_DOWN,T_MOVE,T_UP,T_CANCEL};
 
 /* logical pixels, app_scale physical pixels each */
 extern int app_w,app_h;
@@ -33,10 +33,18 @@ bool app_step(float dt);
 void app_touch(int state,double x,double y);
 /* evdev code of a pressed key */
 void app_key(uint32_t key);
+void app_text(const char *utf8);
 
 int app_run(const char *title,const char *id);
 void app_redraw(void);
+bool app_caret(void);
+void app_offset(float x,float y);
+void app_view(float x0,float y0,float x1,float y1);
 void app_quit(void);
+bool app_hardware_keyboard(void);
+float keyboard_height(void);
+void keyboard_draw(bool numeric);
+bool keyboard_touch(int state,double x,double y,bool numeric);
 uint32_t app_ms(void);
 
 /* drawing 

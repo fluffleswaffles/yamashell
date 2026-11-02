@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Contacts
+Exec=yamashell-contacts
+Icon=yamashell-phone
+Categories=Telephony;

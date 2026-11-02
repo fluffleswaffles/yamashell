@@ -132,6 +132,8 @@ void notify_init(struct server *s);
 void notify_finish(void);
 int notify_list(const struct note **out);
 void notify_close(uint32_t id);
+pid_t sound_play(bool ring);
+void sound_stop(pid_t pid);
 /* new_id = the note that just came or changed, 0 when one only went away */
 void ui_notes_changed(struct server *s, uint32_t new_id);
 void ui_init(struct server *s);

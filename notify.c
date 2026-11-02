@@ -105,6 +105,7 @@ static int method_notify(sd_bus_message *m,void *data,sd_bus_error *err){
 	memmove(&notes[1],&notes[0],sizeof(*notes)*(size_t)nnotes);notes[0]=n;nnotes++;
 	rearm();
 	ui_notes_changed(server,n.id);
+	if(!replaces){sound_play(false);}
 	return sd_bus_reply_method_return(m,"u",n.id);
 }
 

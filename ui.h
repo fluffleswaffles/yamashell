@@ -40,7 +40,7 @@ struct layer{GLuint vbo;struct vtx *v;int n,cap,drawn;};
 struct item{int layer,act,arg;float x,y,w,h;};
 struct glyph{uint32_t cp;int face,size,x,y,w,h,left,top,adv;};
 struct toggle{const char *name;uint32_t icon;bool on,na;};
-struct status{int pct;bool charging,charger,usb,card;};
+struct status{int pct;bool charging,charger,usb,card;int signal,rat;};
 struct nicon{char name[160];bool ok;uint32_t used;};
 struct ui{
 	GLuint program,atlas,wall;
@@ -73,6 +73,12 @@ struct ui{
 	struct spring sym;int sym_focus;
 	struct spring osd;int osd_value;
 	bool locked,aod;struct spring lock,charge;
+	struct wl_event_source *call_poll;
+	pid_t call_pid,ring_pid;bool call_shown,call_answered,modem_failed;
+	unsigned call_id,call_state,call_started;bool call_incoming;int call_focus;
+	struct spring call_show,call_ring,call_press;
+	double call_touch_x,call_touch_y;
+	char caller[24];
 	char wall_conf[300]; /* the config wallpaper line the texture was made from */
 };
 
@@ -114,6 +120,10 @@ struct status read_status(void);
 void status_bar(struct ui *u,const char *hm);
 void status_init(struct server *s);
 void status_finish(struct ui *u);
+void call_init(struct server *s);
+bool call_key(struct server *s,uint32_t key,uint32_t state);
+bool call_touch(struct server *s,double x,double y,int state);
+void call_draw(struct server *s,struct layer *l);
 /* shade.c */
 int note_slot(struct ui *u,const struct note *n);
 void note_icon(struct ui *u,struct layer *l,float cx,float cy,int slot,uint32_t ic,int size,float a);

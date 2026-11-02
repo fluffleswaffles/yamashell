@@ -56,7 +56,7 @@ static const struct{const char *conf,*title;}switches[]={{"sym","Sym"},{"shift_s
 #define NKBDS (int)(sizeof(kbds)/sizeof(*kbds))
 #define NSWITCHES (int)(sizeof(switches)/sizeof(*switches))
 static int kbd_pick,switch_pick,is_e6=-1;
-static bool sticky=true,aod;
+static bool sticky=true,aod,sim_page;
 
 static bool section_shown(int i){
 	if(is_e6<0){is_e6=!strcmp(config_device(),"e6");}
@@ -407,6 +407,10 @@ static void draw_page(float ox,bool front){
 		if(s->rows[0].title){separator(ox+16,y-1,ox+app_w);}
 	}
 	for(int i=0;i<4 && s->rows[i].title;i++,y+=ROW){
+		if(page==0 && i==2){
+			if(front){hit(H_CHOICE,15,ox,y,app_w,ROW);}
+			row(ox,y,s->rows[i].icon,"SIM","Modem and startup",1);continue;
+		}
 		row(ox,y,s->rows[i].icon,s->rows[i].title,"Not available yet",.42f);
 		if(i<3 && s->rows[i+1].title){separator(ox+76,y+ROW-1,ox+app_w);}
 	}
@@ -416,6 +420,14 @@ static void draw_page(float ox,bool front){
 		icon(ox+app_w/2.f,cy,s->icon,48,C_WHITE,.5f);
 		text(F_TEXT,ox+app_w/2.f,cy+80,"Nothing here yet",17,C_WHITE,.65f,1);
 	}
+}
+
+static void draw_sim(float ox,bool front){
+	float top=-subl.x,y=TOP+top;
+	header(ox,top,"SIM",front);
+	char v[8]="1";config_get("modem_autostart",v,sizeof(v));
+	choice(ox,y,ROW,14,"Modem on startup","Enable the modem when the phone starts",strcmp(v,"0")!=0,1,front);
+	subl.max=fmaxf(0,y+ROW+subl.x+12-app_h);
 }
 
 static void draw_picker(float ox,bool front){
@@ -464,9 +476,10 @@ void app_draw(void){
 		draw_page(px-app_w*.3f*sub.x,on_page);
 		fill(px,0,dx-px,app_h,0,0,0,.5f*clampf(sub.x,0,1));
 	}
-	if((detail>=0 || picking>=0) && dx<app_w){
+	if((detail>=0 || picking>=0 || sim_page) && dx<app_w){
 		clip(dx,0,app_w,app_h);background();
-		if(detail>=0){draw_detail(dx,is_open(&sub));}
+		if(sim_page){draw_sim(dx,is_open(&sub));}
+		else if(detail>=0){draw_detail(dx,is_open(&sub));}
 		else{draw_picker(dx,is_open(&sub));}
 	}
 }
@@ -496,7 +509,7 @@ bool app_step(float dt){
 	}
 	if(gesture!=G_SCROLL){scroll_step(&list,dt);scroll_step(&pagel,dt);scroll_step(&subl,dt);m|=scroll_moving(&list) || scroll_moving(&pagel) || scroll_moving(&subl);}
 
-	if(!is_open(&sub) && !spring_moving(&sub)){picking=-1;}
+	if(!is_open(&sub) && !spring_moving(&sub)){picking=-1;sim_page=false;}
 	if(!is_open(&sub) && !spring_moving(&sub) && detail>=0){detail=-1;subl=(struct scroll){0};app_forget(detail_icon);free(detail_icon);detail_icon=NULL;}
 	if(!is_open(&slide) && !spring_moving(&slide)){page=-1;}
 	if(press.x==0 && !spring_moving(&press)){pressed=-1;}
@@ -546,6 +559,7 @@ static void launch(const char *exec){
 }
 
 static void back(void){
+	if(sim_page && is_open(&sub)){spring_to(&sub,0);focus=keys ? 1 : -1;return;}
 	if(is_open(&sub)){spring_to(&sub,0);focus=keys ? detail+1 : -1;return;}
 	if(!is_open(&slide)){app_quit();return;}
 	spring_to(&slide,0);
@@ -570,6 +584,8 @@ static void activate(struct hit *h){
 	else if(h->act==H_KEY){picking=h->arg;spring_to(&sub,1);focus=-1;subl=(struct scroll){0};}
 	else if(h->act==H_CHOICE && picking>=P_DIM){char v[16];snprintf(v,sizeof(v),"%d",pickers[picking].times[h->arg]);config_set(pickers[picking].conf,v);back();}
 	else if(h->act==H_PICK || (h->act==H_CHOICE && picking>=0)){config_set(pickers[picking].conf,h->arg ? apps[h->arg-1].exec : "");back();}
+	else if(h->act==H_CHOICE && h->arg==14){char v[8]="1";config_get("modem_autostart",v,sizeof(v));config_set("modem_autostart",!strcmp(v,"0") ? "1" : "0");}
+	else if(h->act==H_CHOICE && h->arg==15){sim_page=true;spring_to(&sub,1);focus=-1;subl=(struct scroll){0};}
 	else if(h->act==H_CHOICE && h->arg==C_AOD){aod_toggle();}
 	else if(h->act==H_CHOICE && h->arg==12){sticky=!sticky;config_set("sticky_keys",sticky ? "on" : "off");}
 	else if(h->act==H_CHOICE && h->arg<8){kbd_pick=h->arg;config_set("keyboard",kbds[kbd_pick].conf);}
@@ -615,6 +631,7 @@ static void track(double y){
 }
 
 void app_touch(int state,double x,double y){
+	if(state==T_CANCEL){gesture=G_NONE;spring_to(&knob,0);spring_to(&press,0);return;}
 	if(state==T_DOWN){
 		struct hit *h=hit_at(x,y);
 		down_x=x;down_y=y;last_y=y;vel=0;move_time=app_ms();keys=false;

@@ -153,7 +153,11 @@ static int reap(int sig,void *data){
 	struct server *s=data;struct ui *u=s->ui;
 	(void)sig;
 	pid_t pid;
-	while((pid=waitpid(-1,NULL,WNOHANG))>0){for(int i=0;i<u->napps;i++){if(u->apps[i].pid==pid){u->apps[i].pid=0;u->dirty=true;}}}
+	while((pid=waitpid(-1,NULL,WNOHANG))>0){
+		if(u->ring_pid==pid){u->ring_pid=0;}
+		if(u->call_pid==pid){u->call_pid=0;u->call_answered=false;u->dirty=true;}
+		for(int i=0;i<u->napps;i++){if(u->apps[i].pid==pid){u->apps[i].pid=0;u->dirty=true;}}
+	}
 	if(u->dirty){schedule_repaint(s,true);}
 	return 0;
 }
@@ -300,6 +304,7 @@ void ui_language(struct server *s){
 bool ui_key(struct server *s,uint32_t key,uint32_t state){
 	struct ui *u=s->ui;
 	if(!u){return false;}
+	if(call_key(s,key,state)){return true;}
 	if(key==KEY_VOLUMEUP || key==KEY_VOLUMEDOWN){
 		if(state){level_set(LEVEL_VOLUME,level_get(LEVEL_VOLUME)+(key==KEY_VOLUMEUP ? 10 : -10));osd_show(s);u->dirty=true;}
 		return true;
@@ -383,6 +388,7 @@ static void track(struct ui *u,double pos){
 
 bool ui_touch(struct server *s,int id,double x,double y,int state){
 	struct ui *u=s->ui;
+	if(u && call_touch(s,x,y,state)){return true;}
 	if(!u || (id!=0 && u->gesture==G_NONE && !u->locked)){return false;}
 	if(id!=0){return true;}
 
@@ -534,6 +540,7 @@ bool ui_touch(struct server *s,int id,double x,double y,int state){
 bool ui_animating(struct server *s){
 	struct ui *u=s->ui;
 	if(!u){return false;}
+	if(spring_moving(&u->call_show) || spring_moving(&u->call_ring) || spring_moving(&u->call_press)){return true;}
 	bool sheet=u->gesture!=G_SHADE_OPEN && u->gesture!=G_SHADE && u->gesture!=G_MENU_OPEN && u->gesture!=G_MENU;
 	/* new glyphs drawn this frame reach the atlas on the next one */
 	return u->dirty || (sheet && (spring_moving(&u->shade) || spring_moving(&u->menu))) || spring_moving(&u->pull) || spring_moving(&u->tasks) || spring_moving(&u->task_pos) || spring_moving(&u->hint) || spring_moving(&u->app) || spring_moving(&u->toast) || (u->gesture!=G_MENU_SCROLL && scroll_moving(&u->apps_scroll)) || (u->gesture!=G_SHADE_SCROLL && scroll_moving(&u->notes_scroll)) || (u->swipe_id && u->gesture!=G_NOTE) || u->fly_i>=0 || spring_moving(&u->lift) || spring_moving(&u->gap) || spring_moving(&u->dim) || spring_moving(&u->osd) || spring_moving(&u->sym) || (u->gesture!=G_LOCK && spring_moving(&u->lock)) || (u->lock.x>0 && spring_moving(&u->charge));
@@ -555,6 +562,9 @@ bool ui_draw_under(struct server *s){
 	spring_step(&u->toast,dt,300);
 	spring_step(&u->osd,dt,300);
 	spring_step(&u->sym,dt,400);
+	spring_step(&u->call_show,dt,300);
+	spring_step(&u->call_ring,dt,120);
+	spring_step(&u->call_press,dt,900);
 	if(u->gesture!=G_MENU_SCROLL){scroll_step(&u->apps_scroll,dt);}
 	if(u->gesture!=G_SHADE_SCROLL){scroll_step(&u->notes_scroll,dt);}
 	shade_step(u,dt);
@@ -626,6 +636,7 @@ void ui_draw_over(struct server *s){
 	shade_draw_swipe(u,dyn);
 	osd_draw(u,dyn);
 	symbols_draw(u,dyn);
+	call_draw(s,dyn);
 	if(u->dirty_y1>u->dirty_y0){u->dirty=true;}
 	draw_dynamic(u,dyn);
 	end(s);
@@ -712,6 +723,7 @@ void ui_init(struct server *s){
 	u->hold=wl_event_loop_add_timer(s->loop,hold_fire,s);
 	u->press=wl_event_loop_add_timer(s->loop,press_fire,s);
 	u->child=wl_event_loop_add_signal(s->loop,SIGCHLD,reap,s);
+	call_init(s);
 	char dir[300];int fd=inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
 	if(fd>=0 && config_dir(dir,sizeof(dir)) && inotify_add_watch(fd,dir,IN_CLOSE_WRITE|IN_MOVED_TO)>=0){u->conf=wl_event_loop_add_fd(s->loop,fd,WL_EVENT_READABLE,conf_changed,s);}
 	if(fd>=0){close(fd);}

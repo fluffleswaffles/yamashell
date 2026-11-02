@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Messages
+Exec=yamashell-messages
+Icon=yamashell-messages
+Categories=Telephony;
