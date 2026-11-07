@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* brightness: the first /sys/class/backlight device (rapuyama-vc on the E6, DCS 0x51 to the panel).
- * volume: only a number in the config for now. both are kept in config.c across reboots */
+ * volume: the PCM backend reads this saved percentage while streaming */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
