@@ -74,7 +74,7 @@ struct ui{
 	struct spring osd;int osd_value;
 	bool locked,aod;struct spring lock,charge;
 	struct wl_event_source *call_poll;
-	pid_t call_pid,ring_pid;bool call_shown,call_answered,modem_failed;
+	pid_t call_pid,ring_pid;bool call_shown,call_answered;unsigned modem_failed;
 	unsigned call_id,call_state,call_started;bool call_incoming;int call_focus;
 	struct spring call_show,call_ring,call_press;
 	double call_touch_x,call_touch_y;

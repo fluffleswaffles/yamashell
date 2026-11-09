@@ -13,10 +13,11 @@
 
 static bool ringing(struct ui *u){return u->call_incoming && u->call_state==5;}
 
-static void notice(const char *app,const char *title,const char *body){
+static void notice(const char *app,const char *title,const char *body,bool critical){
 	if(fork()==0){
 		sigset_t mask;sigemptyset(&mask);sigprocmask(SIG_SETMASK,&mask,NULL);
-		execlp("notify-send","notify-send","-a",app,title,body,(char *)NULL);_exit(127);
+		if(critical){execlp("notify-send","notify-send","-u","critical","-t","0","-a",app,title,body,(char *)NULL);}
+		else{execlp("notify-send","notify-send","-a",app,title,body,(char *)NULL);}_exit(127);
 	}
 }
 
@@ -72,11 +73,15 @@ static int poll_call(void *data){
 	float ring=ringing(u) ? (u->call_ring.to>.5f ? 0 : 1) : 0;
 	if(ring!=u->call_ring.to){spring_to(&u->call_ring,ring);schedule_repaint(s,true);}
 	snprintf(path,sizeof(path),"%s/failed",directory);
-	if(access(path,F_OK)==0 && !u->modem_failed){
-		char reason[24]="";FILE *failure=fopen(path,"r");if(failure){fscanf(failure,"%23s",reason);fclose(failure);}
-		u->modem_failed=true;notice("Phone","Modem unavailable",!strcmp(reason,"observer") ? "Call status is temporarily unavailable. The modem has not been restarted." : !strcmp(reason,"runtime") ? "The modem runtime stopped. A fresh Linux boot is required." : "The modem could not be activated.");
+	char reason[24]="";unsigned failed=0;FILE *failure=fopen(path,"r");
+	if(failure){
+		fscanf(failure,"%23s",reason);fclose(failure);
+		failed=!strcmp(reason,"observer") ? 1 : !strcmp(reason,"runtime") ? 3 : 2;
 	}
-	if(access(path,F_OK)!=0){u->modem_failed=false;}
+	if(failed && failed!=u->modem_failed){
+		notice("Phone","Modem unavailable",failed==1 ? "Call status is temporarily unavailable. The modem has not been restarted." : failed==3 ? "The modem runtime stopped. A fresh Linux boot is required." : "The modem could not be activated.",failed==3);
+	}
+	u->modem_failed=failed;
 	static unsigned checked;static bool loaded;static char latest[48];
 	if(milliseconds()-checked>2000){
 		checked=milliseconds();struct message *messages=calloc(MESSAGE_LIMIT,sizeof(*messages));
@@ -84,7 +89,7 @@ static int poll_call(void *data){
 			int n=messages_load(messages,MESSAGE_LIMIT),i=n-1;
 			while(i>=0 && messages[i].outgoing){i--;}
 			if(i>=0){
-				if(loaded && strcmp(latest,messages[i].id)){notice("Messages","New message",messages[i].number);}
+				if(loaded && strcmp(latest,messages[i].id)){notice("Messages","New message",messages[i].number,false);}
 				snprintf(latest,sizeof(latest),"%s",messages[i].id);
 			}
 			loaded=true;free(messages);
