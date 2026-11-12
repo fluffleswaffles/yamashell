@@ -7,6 +7,7 @@
 #include <strings.h>
 #include <linux/input.h>
 #include "ui.h"
+#include "../charging/state.h"
 
 struct toggle toggles[]={{"WLAN",0xe648,false,true},{"Bluetooth",0xe1a9,false,true},{"Silent",0xe04f,false,false},{"Torch",0xe3e7,false,false}};
 #define NTOGGLES (int)(sizeof(toggles)/sizeof(*toggles))
@@ -129,9 +130,14 @@ void shade_build(struct ui *u){
 	float ny=u->list_top;
 	struct{uint32_t icon;const char *title;char sub[96];bool show;}notes[3]={
 		{I_USB,"USB connected","Shell on ttyGS0",st.usb},
-		{st.charging ? I_CHARGING : I_BATTERY,"Battery","",st.pct>=0},
+		{st.charging ? I_CHARGING : I_BATTERY,"Battery","",st.pct>=0 || st.charge_mode==CHARGE_ERROR},
 		{I_CARD,"Memory card","Root filesystem on mmcblk0p2",st.card}};
 	if(st.pct>=0){snprintf(notes[1].sub,sizeof(notes[1].sub),"%d%%, %s",st.pct,st.charging ? "charging" : st.charger ? "charger connected" : "on battery");}
+	if(st.charge_mode==CHARGE_ERROR){snprintf(notes[1].sub,sizeof(notes[1].sub),"Charging control unavailable");}
+	else if(st.charge_mode>=0 && st.pct>=0){
+		snprintf(notes[1].sub,sizeof(notes[1].sub),"%d%%, %s, %+d mA",st.pct,
+			st.charge_mode==CHARGE_FULL ? "full" : st.charging ? "charging" : st.charger ? "charger connected" : "on battery",st.net_ma);
+	}
 
 	for(int i=0;i<3;i++){
 		if(!notes[i].show){continue;}

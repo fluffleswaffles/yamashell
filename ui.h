@@ -40,7 +40,7 @@ struct layer{GLuint vbo;struct vtx *v;int n,cap,drawn;};
 struct item{int layer,act,arg;float x,y,w,h;};
 struct glyph{uint32_t cp;int face,size,x,y,w,h,left,top,adv;};
 struct toggle{const char *name;uint32_t icon;bool on,na;};
-struct status{int pct;bool charging,charger,usb,card;int signal,rat;};
+struct status{int pct;bool charging,charger,usb,card;int signal,rat,charge_mode,net_ma;};
 struct nicon{char name[160];bool ok;uint32_t used;};
 struct ui{
 	GLuint program,atlas,wall;

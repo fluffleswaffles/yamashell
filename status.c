@@ -12,10 +12,11 @@
 #include <time.h>
 #include <signal.h>
 #include "ui.h"
+#include "../charging/state.h"
 
 /* system state: battery, charger, usb shell, card */
 struct status read_status(void){
-	struct status st={.pct=-1,.signal=-1};
+	struct status st={.pct=-1,.signal=-1,.charge_mode=-1};
 	char buf[32]={0},path[300];
 	FILE *f=fopen("/sys/class/power_supply/battery/capacity","r");
 	if(f){if(fscanf(f,"%d",&st.pct)!=1){st.pct=-1;}fclose(f);}
@@ -35,6 +36,17 @@ struct status read_status(void){
 		if(f){if(fgets(buf,sizeof(buf),f) && !strncmp(buf,"configured",10)){st.usb=st.charger;}fclose(f);}
 	}
 	if(d){closedir(d);}
+	f=fopen("/run/rapuyama-charge/state","r");
+	if(f){
+		char state_buf[256];struct charge_state charge;struct timespec now;
+		st.charging=false;st.pct=-1;st.charge_mode=CHARGE_ERROR;
+		if(!clock_gettime(CLOCK_MONOTONIC,&now) && fgets(state_buf,sizeof(state_buf),f) &&
+		   charge_state_parse(state_buf,(int64_t)now.tv_sec*1000+now.tv_nsec/1000000,&charge)){
+			st.pct=charge.pct;st.charger=charge.source!=0;st.charge_mode=charge.mode;st.net_ma=charge.net_ma;
+			st.charging=charge.mode==CHARGE_CHARGING;st.usb=st.usb && charge.usb_budget_ua>0;
+		}
+		fclose(f);
+	}
 	st.card=access("/dev/mmcblk0",F_OK)==0;
 	f=fopen("/run/rapuyama-modem/signal","r");
 	if(f){
