@@ -40,7 +40,7 @@ struct layer{GLuint vbo;struct vtx *v;int n,cap,drawn;};
 struct item{int layer,act,arg;float x,y,w,h;};
 struct glyph{uint32_t cp;int face,size,x,y,w,h,left,top,adv;};
 struct toggle{const char *name;uint32_t icon;bool on,na;};
-struct status{int pct;bool charging,charger,usb,card;int signal,rat,charge_mode,net_ma;};
+struct status{int pct;bool charging,charger,usb,card,data;int signal,rat,charge_mode,net_ma;};
 struct nicon{char name[160];bool ok;uint32_t used;};
 struct ui{
 	GLuint program,atlas,wall;
@@ -85,6 +85,7 @@ struct ui{
 extern struct toggle toggles[];
 /* Material Icons code points, system pictograms only: apps bring their own icons */
 #define I_USB 0xe1e0
+#define I_DATA 0xe8d5 /* swap_vert, mobile data up */
 #define I_BATTERY 0xe1a5
 #define I_CHARGING 0xe1a3
 #define I_CARD 0xe623

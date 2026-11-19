@@ -57,6 +57,8 @@ struct status read_status(void){
 		}
 		fclose(f);
 	}
+	f=fopen("/run/rapuyama-modem/data","r");
+	if(f){if(fgets(buf,sizeof(buf),f)){st.data=!strncmp(buf,"connected ",10);}fclose(f);}
 	return st;
 }
 
@@ -141,6 +143,7 @@ void status_bar(struct ui *u,const char *hm){
 	}
 	rx-=30;
 	if(st.rat){snprintf(buf,sizeof(buf),"%dG",st.rat);rx-=text(u,bar,F_TEXT,rx,21,buf,14,white(.9f),2)+8;}
+	if(st.data){icon(u,bar,rx-6,STATUS/2.f,I_DATA,18,white(.9f));rx-=22;}
 	if(st.pct>=0){
 		snprintf(buf,sizeof(buf),"%d%%",st.pct);
 		rx-=text(u,bar,F_TEXT,rx,21,buf,16,white(.9f),2)+14;

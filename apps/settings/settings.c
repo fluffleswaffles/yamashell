@@ -5,6 +5,7 @@
  * apps lists the menu's apps with a page for each, about phone shows sysinfo.c's view of the hardware,
  * the other sections are placeholders for later */
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@
 #include "image.h"
 #include "apps.h"
 #include "sysinfo.h"
+#include "field.h"
 
 #define TOP 76 /* the large title above the list, the header on a page */
 #define ROW 70
@@ -56,7 +58,9 @@ static const struct{const char *conf,*title;}switches[]={{"sym","Sym"},{"shift_s
 #define NKBDS (int)(sizeof(kbds)/sizeof(*kbds))
 #define NSWITCHES (int)(sizeof(switches)/sizeof(*switches))
 static int kbd_pick,switch_pick,is_e6=-1;
-static bool sticky=true,aod,sim_page;
+static bool sticky=true,aod,sim_page,apn_editing;
+static char apn[101];
+static struct field apn_field;
 
 static bool section_shown(int i){
 	if(is_e6<0){is_e6=!strcmp(config_device(),"e6");}
@@ -422,12 +426,66 @@ static void draw_page(float ox,bool front){
 	}
 }
 
+static void first_line(const char *path,char *buf,size_t n){
+	FILE *f=fopen(path,"r");buf[0]=0;
+	if(f){if(!fgets(buf,n,f)){buf[0]=0;}fclose(f);buf[strcspn(buf,"\n")]=0;}
+}
+
+static const char *data_text(char *buf,size_t n){
+	char v[64];first_line("/run/rapuyama-modem/data",v,sizeof(v));
+	if(!strncmp(v,"connected ",10)){snprintf(buf,n,"Connected, %s",v+10);}
+	else if(!strcmp(v,"connecting")){snprintf(buf,n,"Connecting...");}
+	else if(!strcmp(v,"waiting")){snprintf(buf,n,"Waiting for the network...");}
+	else if(!strncmp(v,"retry ",6)){snprintf(buf,n,"No connection, retrying in %s s",v+6);}
+	else if(!strcmp(v,"failed")){snprintf(buf,n,"Stopped after an error");}
+	else{snprintf(buf,n,"Internet over the cellular network");}
+	return buf;
+}
+
+/* status ready/failed, and why in failed */
+static const char *modem_text(char *buf,size_t n){
+	char status[32],why[32];
+	first_line("/run/rapuyama-modem/status",status,sizeof(status));
+	first_line("/run/rapuyama-modem/failed",why,sizeof(why));
+	if(!strcmp(status,"failed") && !strcmp(why,"dsp")){snprintf(buf,n,"Not started: DSP not ready, restart the phone");}
+	else if(!strcmp(status,"failed")){snprintf(buf,n,"Stopped after an error");}
+	else{snprintf(buf,n,"Enable the modem when the phone starts");}
+	return buf;
+}
+
+static void apn_done(bool save){
+	if(save){config_set("apn",apn);}
+	apn_editing=false;
+}
+
 static void draw_sim(float ox,bool front){
 	float top=-subl.x,y=TOP+top;
 	header(ox,top,"SIM",front);
-	char v[8]="1";config_get("modem_autostart",v,sizeof(v));
-	choice(ox,y,ROW,14,"Modem on startup","Enable the modem when the phone starts",strcmp(v,"0")!=0,1,front);
-	subl.max=fmaxf(0,y+ROW+subl.x+12-app_h);
+	char v[8]="1",modem[64];config_get("modem_autostart",v,sizeof(v));
+	choice(ox,y,ROW,14,"Modem on startup",modem_text(modem,sizeof(modem)),strcmp(v,"0")!=0,1,front);
+	separator(ox+20,y+ROW-1,ox+app_w);
+	y+=ROW;
+	char d[8]="0",state[96];config_get("mobile_data",d,sizeof(d));
+	choice(ox,y,ROW,16,"Mobile data",data_text(state,sizeof(state)),!strcmp(d,"1"),1,front);
+	separator(ox+20,y+ROW-1,ox+app_w);
+	y+=ROW;
+	if(apn_editing){
+		text(F_TEXT,ox+20,y+31,"Access point",19,C_WHITE,1,0);
+		field_draw(&apn_field,ox+16,y+44,app_w-32,40,17,"Automatic",true,false);
+		y+=ROW+24;
+	}
+	else{
+		char a[101]="";config_get("apn",a,sizeof(a));
+		if(front){
+			if(pressed==17){fill(ox+6,y+2,app_w-12,ROW-4,10,0x144c80,0x08335c,.35f*press.x);}
+			hit(H_CHOICE,17,ox,y,app_w,ROW);
+		}
+		text(F_TEXT,ox+20,y+31,"Access point",19,C_WHITE,1,0);
+		text(F_TEXT,ox+20,y+54,*a ? a : "Automatic, from the operator list",15,C_WHITE,.65f,0);
+		y+=ROW;
+	}
+	subl.max=fmaxf(0,y+subl.x+12-app_h+keyboard_height());
+	if(apn_editing){keyboard_draw(false);}
 }
 
 static void draw_picker(float ox,bool front){
@@ -509,7 +567,7 @@ bool app_step(float dt){
 	}
 	if(gesture!=G_SCROLL){scroll_step(&list,dt);scroll_step(&pagel,dt);scroll_step(&subl,dt);m|=scroll_moving(&list) || scroll_moving(&pagel) || scroll_moving(&subl);}
 
-	if(!is_open(&sub) && !spring_moving(&sub)){picking=-1;sim_page=false;}
+	if(!is_open(&sub) && !spring_moving(&sub)){picking=-1;sim_page=false;apn_editing=false;}
 	if(!is_open(&sub) && !spring_moving(&sub) && detail>=0){detail=-1;subl=(struct scroll){0};app_forget(detail_icon);free(detail_icon);detail_icon=NULL;}
 	if(!is_open(&slide) && !spring_moving(&slide)){page=-1;}
 	if(press.x==0 && !spring_moving(&press)){pressed=-1;}
@@ -559,6 +617,7 @@ static void launch(const char *exec){
 }
 
 static void back(void){
+	if(apn_editing){apn_done(false);return;}
 	if(sim_page && is_open(&sub)){spring_to(&sub,0);focus=keys ? 1 : -1;return;}
 	if(is_open(&sub)){spring_to(&sub,0);focus=keys ? detail+1 : -1;return;}
 	if(!is_open(&slide)){app_quit();return;}
@@ -585,6 +644,8 @@ static void activate(struct hit *h){
 	else if(h->act==H_CHOICE && picking>=P_DIM){char v[16];snprintf(v,sizeof(v),"%d",pickers[picking].times[h->arg]);config_set(pickers[picking].conf,v);back();}
 	else if(h->act==H_PICK || (h->act==H_CHOICE && picking>=0)){config_set(pickers[picking].conf,h->arg ? apps[h->arg-1].exec : "");back();}
 	else if(h->act==H_CHOICE && h->arg==14){char v[8]="1";config_get("modem_autostart",v,sizeof(v));config_set("modem_autostart",!strcmp(v,"0") ? "1" : "0");}
+	else if(h->act==H_CHOICE && h->arg==16){char v[8]="0";config_get("mobile_data",v,sizeof(v));config_set("mobile_data",strcmp(v,"1") ? "1" : "0");}
+	else if(h->act==H_CHOICE && h->arg==17){apn[0]=0;config_get("apn",apn,sizeof(apn));field_init(&apn_field,apn,sizeof(apn),false);apn_editing=true;}
 	else if(h->act==H_CHOICE && h->arg==15){sim_page=true;spring_to(&sub,1);focus=-1;subl=(struct scroll){0};}
 	else if(h->act==H_CHOICE && h->arg==C_AOD){aod_toggle();}
 	else if(h->act==H_CHOICE && h->arg==12){sticky=!sticky;config_set("sticky_keys",sticky ? "on" : "off");}
@@ -611,6 +672,12 @@ static void move_focus(int dir){
 void app_key(uint32_t code){
 	struct hit *f=focus>=0 && focus<nhits ? &hits[focus] : NULL;
 	keys=true;
+	if(apn_editing){
+		if(code==KEY_ENTER || code==KEY_KPENTER || code==KEY_OK){apn_done(true);}
+		else if(code==KEY_ESC){apn_done(false);}
+		else{field_key(&apn_field,code);}
+		return;
+	}
 
 	int row_step=f && f->act==H_WALL ? wall_cols() : 1;
 	if(code==KEY_UP){move_focus(-row_step);}
@@ -630,7 +697,15 @@ static void track(double y){
 	move_time=now;last_y=y;
 }
 
+void app_text(const char *utf8){
+	if(!apn_editing){return;}
+	for(const char *p=utf8;*p;p++){if(!isalnum((unsigned char)*p) && *p!='.' && *p!='-' && *p!='_'){return;}}
+	field_text(&apn_field,utf8);
+}
+
 void app_touch(int state,double x,double y){
+	if(apn_editing && keyboard_touch(state,x,y,false)){return;}
+	if(apn_editing && state==T_DOWN){apn_done(true);}
 	if(state==T_CANCEL){gesture=G_NONE;spring_to(&knob,0);spring_to(&press,0);return;}
 	if(state==T_DOWN){
 		struct hit *h=hit_at(x,y);

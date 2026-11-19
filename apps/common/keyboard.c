@@ -19,7 +19,7 @@ bool app_hardware_keyboard(void){
 float keyboard_height(void){return app_hardware_keyboard() ? 0 : 196;}
 
 static const char *row(int r,bool numeric){
-	static const char *letters[]={"qwertyuiop","asdfghjkl","zxcvbnm"," "};
+	static const char *letters[]={"qwertyuiop","asdfghjkl","zxcvbnm",".- "};
 	static const char *digits[]={"123","456","789","+0"};
 	return numeric ? digits[r] : letters[r];
 }
